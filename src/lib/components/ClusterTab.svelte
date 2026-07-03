@@ -403,7 +403,7 @@
         name={s.views.top.name}
         body={s.views.top.body} />
     {:else if s.views.top.kind === "logs"}
-      <LogsView {tabId} namespace={s.views.top.namespace} pod={s.views.top.pod} />
+      <LogsView {tabId} namespace={s.views.top.namespace} pod={s.views.top.pod} session={s} />
     {:else if s.views.top.kind === "exec"}
       <TerminalView
         {tabId}

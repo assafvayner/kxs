@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "../api";
-  let { tabId, namespace, pod }: { tabId: number; namespace: string; pod: string } = $props();
+  import type { TabSession } from "../stores/sessions.svelte";
+  import { matchRow } from "../command";
+  let { tabId, namespace, pod, session }: { tabId: number; namespace: string; pod: string; session: TabSession } = $props();
 
   let containers = $state<string[]>([]);
   let container = $state<string | undefined>(undefined);
   let follow = $state(true);
   let wrap = $state(true);
-  let query = $state("");
   let lines = $state<string[]>([]);
   let error = $state<string | null>(null);
   let streamId: number | undefined;
@@ -58,7 +59,7 @@
     if (streamId !== undefined) api.stopLogs(tabId, streamId).catch(() => {});
   });
 
-  const visible = $derived(query ? lines.filter((l) => l.toLowerCase().includes(query.toLowerCase())) : lines);
+  const visible = $derived(session.filter ? lines.filter((l) => matchRow(l, session.filter)) : lines);
 </script>
 
 <div class="detail">
@@ -69,7 +70,6 @@
     </select>
     <label class="chk"><input type="checkbox" bind:checked={follow} onchange={start} /> follow</label>
     <label class="chk"><input type="checkbox" bind:checked={wrap} /> wrap</label>
-    <input class="mono" placeholder="/ search" bind:value={query} />
     <span class="dim">{visible.length}/{lines.length}</span>
   </div>
   {#if error}<div class="connect-error"><pre class="mono">{error}</pre></div>{/if}
