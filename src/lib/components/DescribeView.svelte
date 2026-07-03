@@ -1,13 +1,23 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api, type ResourceEvent } from "../api";
+  import type { TabSession } from "../stores/sessions.svelte";
+  import HighlightedText from "./HighlightedText.svelte";
   let {
     tabId,
     title,
     namespace,
     name,
     body,
-  }: { tabId: number; title: string; namespace: string | null; name: string; body: string } = $props();
+    session,
+  }: {
+    tabId: number;
+    title: string;
+    namespace: string | null;
+    name: string;
+    body: string;
+    session: TabSession;
+  } = $props();
   let events = $state<ResourceEvent[]>([]);
   let eventsError = $state<string | null>(null);
   onMount(async () => {
@@ -22,7 +32,7 @@
 <div class="detail">
   <div class="detail-bar"><span class="mono">{title}</span></div>
   <div class="detail-body">
-    <pre class="mono">{body}</pre>
+    <HighlightedText {body} query={session.filter} />
     <h3 class="events-h">Events</h3>
     {#if eventsError}<div class="dim">events unavailable: {eventsError}</div>
     {:else if events.length === 0}<div class="dim">No events.</div>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveKind, matchRow, fuzzyKinds } from "./command";
 import { currentKindLabel } from "./command";
+import { searchEnabled } from "./command";
 import type { ResourceKind } from "./api";
 import type { View } from "./stores/viewstack.svelte";
 
@@ -76,5 +77,25 @@ describe("currentKindLabel", () => {
 
   it("falls back to Pods when no pods/resource view is in the stack", () => {
     expect(currentKindLabel([{ kind: "metrics" }])).toBe("Pods");
+  });
+});
+
+describe("searchEnabled", () => {
+  it("is disabled only on the exec terminal", () => {
+    expect(searchEnabled({ kind: "exec", namespace: "default", pod: "p", container: null })).toBe(false);
+  });
+  it("is enabled on pods, resource, describe, yaml, logs, metrics, forwards", () => {
+    expect(searchEnabled({ kind: "pods" })).toBe(true);
+    expect(
+      searchEnabled({
+        kind: "resource",
+        resourceKind: { group: "apps", version: "v1", kind: "Deployment", plural: "deployments", namespaced: true, aliases: [] },
+      }),
+    ).toBe(true);
+    expect(searchEnabled({ kind: "describe", title: "t", namespace: "default", name: "n", body: "" })).toBe(true);
+    expect(searchEnabled({ kind: "yaml", title: "t", body: "" })).toBe(true);
+    expect(searchEnabled({ kind: "logs", namespace: "default", pod: "p" })).toBe(true);
+    expect(searchEnabled({ kind: "metrics" })).toBe(true);
+    expect(searchEnabled({ kind: "forwards" })).toBe(true);
   });
 });

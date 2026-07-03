@@ -7,11 +7,12 @@
   import { now } from "../stores/now.svelte";
   import { age } from "../age";
   import { handleClusterKey, clusterKeyHandlers, type ClusterActions } from "../clusterKeys";
-  import { currentKindLabel } from "../command";
+  import { currentKindLabel, searchEnabled, matchRow } from "../command";
   import VirtualList from "./VirtualList.svelte";
   import CommandBar from "./CommandBar.svelte";
   import ConfirmBar from "./ConfirmBar.svelte";
   import ResourcePicker from "./ResourcePicker.svelte";
+  import SearchBar from "./SearchBar.svelte";
   import ResourceTableView from "./ResourceTableView.svelte";
   import YamlView from "./YamlView.svelte";
   import DescribeView from "./DescribeView.svelte";
@@ -27,13 +28,14 @@
   sessions.set(tabId, s);
 
   let destroyed = false;
-  let bar = $state<"command" | "filter" | null>(null);
+  let bar = $state<"command" | null>(null);
   let confirm = $state<null | {
     message: string;
     kind: "confirm" | "number";
     run: (value?: number) => Promise<void>;
     clearSelectionOnSuccess?: boolean;
   }>(null);
+  let searchBar: { focus: () => void } | undefined = $state();
   let actionError = $state<string | null>(null);
 
   const SCALABLE_KINDS = ["Deployment", "StatefulSet", "ReplicaSet", "ReplicationController"];
@@ -149,12 +151,7 @@
     try {
       const body = await api.getResourceYaml(tabId, k, sel.namespace, sel.name);
       if (kind === "yaml") {
-        pushView({
-          kind: "yaml",
-          title: `${k.kind} ${sel.name}`,
-          body,
-          editable: { resourceKind: k, namespace: sel.namespace, name: sel.name },
-        });
+        pushView({ kind: "yaml", title: `${k.kind} ${sel.name}`, body });
       } else {
         pushView({
           kind: "describe",
@@ -171,7 +168,7 @@
 
   const actions: ClusterActions = {
     openCommand: () => (bar = "command"),
-    openFilter: () => (bar = "filter"),
+    focusSearch: () => searchBar?.focus(),
     back: () => {
       if (bar) bar = null;
       else popView();
@@ -339,6 +336,7 @@
         session={s}
         label={currentKindLabel(s.views.stack)}
         onpick={(k) => pushView({ kind: "resource", resourceKind: k })} />
+      <SearchBar bind:this={searchBar} session={s} enabled={searchEnabled(s.views.top)} />
       <nav class="breadcrumb">
         {#each s.views.stack as v, i (i)}
           {#if i > 0}<span class="sep">/</span>{/if}
@@ -361,7 +359,7 @@
           <span>NAMESPACE</span><span>NAME</span><span>READY</span><span>STATUS</span>
           <span>RESTARTS</span><span>IP</span><span>NODE</span><span>AGE</span>
         </div>
-        <VirtualList items={s.pods.rows} itemHeight={28}>
+        <VirtualList items={s.pods.rows.filter((p) => matchRow(p.name, s.filter))} itemHeight={28}>
           {#snippet row(pod: PodRow)}
             <div
               class="pod-row"
@@ -390,20 +388,17 @@
     {:else if s.views.top.kind === "resource"}
       <ResourceTableView {tabId} session={s} resourceKind={s.views.top.resourceKind} />
     {:else if s.views.top.kind === "yaml"}
-      <YamlView
-        {tabId}
-        title={s.views.top.title}
-        body={s.views.top.body}
-        editable={s.views.top.editable} />
+      <YamlView title={s.views.top.title} body={s.views.top.body} session={s} />
     {:else if s.views.top.kind === "describe"}
       <DescribeView
         {tabId}
         title={s.views.top.title}
         namespace={s.views.top.namespace}
         name={s.views.top.name}
-        body={s.views.top.body} />
+        body={s.views.top.body}
+        session={s} />
     {:else if s.views.top.kind === "logs"}
-      <LogsView {tabId} namespace={s.views.top.namespace} pod={s.views.top.pod} />
+      <LogsView {tabId} namespace={s.views.top.namespace} pod={s.views.top.pod} session={s} />
     {:else if s.views.top.kind === "exec"}
       <TerminalView
         {tabId}
@@ -411,7 +406,7 @@
         pod={s.views.top.pod}
         container={s.views.top.container} />
     {:else if s.views.top.kind === "forwards"}
-      <ForwardsView {tabId} />
+      <ForwardsView {tabId} session={s} />
     {:else if s.views.top.kind === "metrics"}
       <MetricsView {tabId} session={s} />
     {/if}
@@ -426,7 +421,6 @@
     {#if bar !== null}
       <CommandBar
         session={s}
-        mode={bar}
         onclose={() => (bar = null)}
         onpick={(k) => pushView({ kind: "resource", resourceKind: k })}
         appCommands={{

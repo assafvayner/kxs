@@ -46,3 +46,8 @@ export function currentKindLabel(views: View[]): string {
   }
   return "Pods";
 }
+
+/** The search bar is active for every view except the exec terminal. */
+export function searchEnabled(view: View): boolean {
+  return view.kind !== "exec";
+}
