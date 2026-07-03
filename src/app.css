@@ -153,3 +153,10 @@ table.events td, table.events th { font-size: 12px; }
 .confirmbar input { flex: 0 0 100px; }
 .terminal-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .term-host { flex: 1; min-height: 0; padding: 4px 8px; background: #16161e; overflow: hidden; }
+.respick { position: relative; display: flex; align-items: center; }
+.respick-btn { background: var(--bg-active); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+.respick-btn:hover { background: var(--bg-hover); border-color: var(--accent); }
+.respick-btn .caret { color: var(--fg-dim); margin-left: 4px; }
+.respick-panel { position: absolute; top: 100%; left: 0; z-index: 20; margin-top: 4px; display: flex; flex-direction: column; min-width: 260px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 6px; }
+.respick-panel input { margin: 6px; }
+.respick-list { display: flex; flex-direction: column; max-height: 320px; overflow: auto; }
