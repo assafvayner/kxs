@@ -153,19 +153,17 @@ impl KubeconfigStore {
     }
 
     /// Where new entries go when no target is given: ~/.kube/config if loaded,
-    /// else the first loaded file.
-    pub fn default_target(&self) -> PathBuf {
+    /// else the first loaded file, else the home default (even if not loaded).
+    pub fn default_target(&self) -> Option<PathBuf> {
         if let Some(hd) = crate::kubeconfig::paths::default_kubeconfig_path() {
             if self.files.iter().any(|f| f.path == hd) {
-                return hd;
+                return Some(hd);
             }
         }
         self.files
             .first()
             .map(|f| f.path.clone())
             .or_else(crate::kubeconfig::paths::default_kubeconfig_path)
-            // unreachable in practice: the app always resolves at least one path (env or home)
-            .expect("no kubeconfig path available")
     }
 
     /// Read the target file fresh from disk, apply `op`, write back, refresh memory.
@@ -210,9 +208,17 @@ impl KubeconfigStore {
                 Ok(())
             });
         }
-        let target = target
+        let target = match target
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.default_target());
+            .or_else(|| self.default_target())
+        {
+            Some(t) => t,
+            None => {
+                return Err(crate::error::Error::Invalid(
+                    "no kubeconfig path available".into(),
+                ))
+            }
+        };
         let name = name.to_string();
         self.mutate(&target, move |cfg| {
             if cfg.clusters.iter().any(|c| c.name == name) {
@@ -256,9 +262,17 @@ impl KubeconfigStore {
                 Ok(())
             });
         }
-        let target = target
+        let target = match target
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.default_target());
+            .or_else(|| self.default_target())
+        {
+            Some(t) => t,
+            None => {
+                return Err(crate::error::Error::Invalid(
+                    "no kubeconfig path available".into(),
+                ))
+            }
+        };
         let name = name.to_string();
         self.mutate(&target, move |cfg| {
             if cfg.users.iter().any(|u| u.name == name) {
@@ -302,9 +316,17 @@ impl KubeconfigStore {
                 name: user.into(),
             });
         }
-        let target = target
+        let target = match target
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.default_target());
+            .or_else(|| self.default_target())
+        {
+            Some(t) => t,
+            None => {
+                return Err(crate::error::Error::Invalid(
+                    "no kubeconfig path available".into(),
+                ))
+            }
+        };
         let (name, cluster, user) = (name.to_string(), cluster.to_string(), user.to_string());
         self.mutate(&target, move |cfg| {
             if cfg.contexts.iter().any(|c| c.name == name) {

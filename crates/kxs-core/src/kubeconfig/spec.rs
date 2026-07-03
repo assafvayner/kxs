@@ -52,6 +52,10 @@ pub struct UserSpec {
     #[serde(default)]
     pub client_key: Option<String>,
     #[serde(default)]
+    pub client_certificate_data: Option<String>,
+    #[serde(default)]
+    pub client_key_data: Option<String>,
+    #[serde(default)]
     pub exec_command: Option<String>,
     #[serde(default)]
     pub exec_args: Option<Vec<String>>,
@@ -164,6 +168,8 @@ pub fn apply_context_spec(store: &mut KubeconfigStore, spec: ContextSpec) -> Res
                 token: spec.user.token.clone(),
                 client_certificate: spec.user.client_certificate.clone(),
                 client_key: spec.user.client_key.clone(),
+                client_certificate_data: spec.user.client_certificate_data.clone(),
+                client_key_data: spec.user.client_key_data.clone(),
                 exec,
                 ..Default::default()
             };
@@ -328,5 +334,23 @@ contexts: [{name: prod, context: {cluster: prod, user: u1}}]
         )
         .unwrap();
         assert!(apply_context_spec(&mut store, spec).is_err());
+    }
+
+    #[test]
+    fn user_inline_cert_data_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = setup(&dir);
+        let spec: ContextSpec = serde_json::from_str(
+            r#"{"name":"cert-ctx","cluster":{"existing":"prod"},
+                "user":{"name":"cert-u","clientCertificateData":"Q0VSVA==","clientKeyData":"S0VZ"}}"#,
+        )
+        .unwrap();
+        apply_context_spec(&mut store, spec).unwrap();
+        let (_, user) = store.find_user("cert-u").unwrap();
+        assert_eq!(
+            user.user.client_certificate_data.as_deref(),
+            Some("Q0VSVA==")
+        );
+        assert_eq!(user.user.client_key_data.as_deref(), Some("S0VZ"));
     }
 }

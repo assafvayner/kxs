@@ -48,15 +48,18 @@ pub fn view(store: &KubeconfigStore, warnings: &[String]) -> KubeconfigView {
             .iter()
             .map(|p| p.display().to_string())
             .collect(),
-        default_target: store.default_target().display().to_string(),
+        default_target: store
+            .default_target()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
         warnings: warnings.to_vec(),
     }
 }
 
 #[tauri::command]
 pub fn list_contexts(state: State<AppState>) -> Result<KubeconfigView, String> {
-    let store = state.store.lock().unwrap();
-    let warnings = state.warnings.lock().unwrap();
+    let store = state.store.lock().unwrap_or_else(|e| e.into_inner());
+    let warnings = state.warnings.lock().unwrap_or_else(|e| e.into_inner());
     Ok(view(&store, &warnings))
 }
 
@@ -75,6 +78,8 @@ pub struct ContextDetailDto {
     pub token: Option<String>,
     pub client_certificate: Option<String>,
     pub client_key: Option<String>,
+    pub client_certificate_data: Option<String>,
+    pub client_key_data: Option<String>,
     pub exec_command: Option<String>,
     pub exec_args: Vec<String>,
     pub exec_env: Vec<[String; 2]>,
@@ -83,7 +88,7 @@ pub struct ContextDetailDto {
 
 #[tauri::command]
 pub fn get_context(name: String, state: State<AppState>) -> Result<ContextDetailDto, String> {
-    let store = state.store.lock().unwrap();
+    let store = state.store.lock().unwrap_or_else(|e| e.into_inner());
     let (path, nc) = store
         .find_context(&name)
         .ok_or_else(|| format!("context \"{name}\" not found"))?;
@@ -108,6 +113,8 @@ pub fn get_context(name: String, state: State<AppState>) -> Result<ContextDetail
         token: user.token,
         client_certificate: user.client_certificate,
         client_key: user.client_key,
+        client_certificate_data: user.client_certificate_data,
+        client_key_data: user.client_key_data,
         exec_command: user.exec.as_ref().map(|e| e.command.clone()),
         exec_args: user
             .exec
@@ -132,7 +139,7 @@ pub fn save_context(
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<(), String> {
-    let mut store = state.store.lock().unwrap();
+    let mut store = state.store.lock().unwrap_or_else(|e| e.into_inner());
     apply_context_spec(&mut store, spec).map_err(|e| e.to_string())?;
     let _ = app.emit("kubeconfig://changed", ());
     Ok(())
@@ -140,7 +147,7 @@ pub fn save_context(
 
 #[tauri::command]
 pub fn delete_context(name: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
-    let mut store = state.store.lock().unwrap();
+    let mut store = state.store.lock().unwrap_or_else(|e| e.into_inner());
     store.delete_context(&name).map_err(|e| e.to_string())?;
     let _ = app.emit("kubeconfig://changed", ());
     Ok(())
