@@ -15,6 +15,7 @@
   let term: Terminal | undefined;
   let execId: number | undefined;
   let closed = $state(false);
+  let destroyed = false;
 
   // Kept across output batches so a multi-byte UTF-8 codepoint split across
   // two channel messages decodes correctly instead of emitting U+FFFD.
@@ -63,6 +64,7 @@
         cols,
         rows,
         (ev) => {
+          if (destroyed) return; // component gone; drop late output (term is disposed)
           if (ev.type === "output") {
             term!.write(decoder.decode(b64decodeToBytes(ev.data), { stream: true }));
           } else {
@@ -71,11 +73,17 @@
           }
         },
       );
+      if (destroyed) {
+        // popped/closed while startExec was awaiting; reap the leaked process
+        if (execId !== undefined) api.stopExec(tabId, execId).catch(() => {});
+        return;
+      }
     } catch (e) {
       term.write(`\r\nfailed to exec: ${String(e)}\r\n`);
     }
   });
   onDestroy(() => {
+    destroyed = true;
     if (execId !== undefined) api.stopExec(tabId, execId).catch(() => {});
     term?.dispose();
   });
