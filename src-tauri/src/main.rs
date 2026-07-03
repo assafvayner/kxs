@@ -31,7 +31,11 @@ fn main() {
             cluster_ipc::watch_pods,
             cluster_ipc::list_containers,
             cluster_ipc::stream_logs,
-            cluster_ipc::stop_logs
+            cluster_ipc::stop_logs,
+            cluster_ipc::list_resource_kinds,
+            cluster_ipc::list_resource_table,
+            cluster_ipc::get_resource_yaml,
+            cluster_ipc::get_resource_events
         ])
         .setup(move |app| {
             watcher::spawn(app.handle().clone(), paths);

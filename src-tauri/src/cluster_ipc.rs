@@ -43,6 +43,16 @@ fn yaml_for(state: &State<'_, AppState>, context: &str) -> Result<String, String
     kxs_cluster::bridge::kubeconfig_yaml_for_context(&store, context)
 }
 
+async fn session_of(
+    sessions: &State<'_, Sessions>,
+    tab_id: u32,
+) -> Result<Arc<ClusterSession>, String> {
+    let map = sessions.0.lock().await;
+    map.get(&tab_id)
+        .map(|h| h.session.clone())
+        .ok_or_else(|| "no session for tab".to_string())
+}
+
 #[tauri::command]
 pub async fn open_session(
     tab_id: u32,
@@ -180,4 +190,72 @@ pub async fn stop_logs(
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn list_resource_kinds(
+    tab_id: u32,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<kxs_cluster::discovery::ResourceKind>, String> {
+    let session = session_of(&sessions, tab_id).await?;
+    kxs_cluster::discovery::discover(session.client.clone()).await
+}
+
+#[tauri::command]
+pub async fn list_resource_table(
+    tab_id: u32,
+    group: String,
+    version: String,
+    plural: String,
+    namespace: Option<String>,
+    sessions: State<'_, Sessions>,
+) -> Result<kxs_cluster::resources::ResourceTable, String> {
+    let session = session_of(&sessions, tab_id).await?;
+    kxs_cluster::resources::list_table(
+        session.client.clone(),
+        &group,
+        &version,
+        &plural,
+        namespace.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn get_resource_yaml(
+    tab_id: u32,
+    group: String,
+    version: String,
+    kind: String,
+    plural: String,
+    namespace: Option<String>,
+    name: String,
+    sessions: State<'_, Sessions>,
+) -> Result<String, String> {
+    let session = session_of(&sessions, tab_id).await?;
+    kxs_cluster::resources::get_yaml(
+        session.client.clone(),
+        &group,
+        &version,
+        &kind,
+        &plural,
+        namespace.as_deref(),
+        &name,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_resource_events(
+    tab_id: u32,
+    namespace: Option<String>,
+    name: String,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<kxs_cluster::resources::ResourceEvent>, String> {
+    let session = session_of(&sessions, tab_id).await?;
+    Ok(
+        kxs_cluster::resources::get_events(session.client.clone(), namespace.as_deref(), &name)
+            .await,
+    )
 }
