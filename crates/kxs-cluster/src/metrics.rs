@@ -37,10 +37,13 @@ pub fn mem_mib(q: &str) -> u64 {
         return n.parse::<u64>().unwrap_or(0);
     }
     if let Some(n) = q.strip_suffix("Gi") {
-        return n.parse::<u64>().unwrap_or(0) * 1024;
+        return n.parse::<f64>().map(|g| (g * 1024.0) as u64).unwrap_or(0);
     }
     if let Some(n) = q.strip_suffix("Ti") {
-        return n.parse::<u64>().unwrap_or(0) * 1024 * 1024;
+        return n
+            .parse::<f64>()
+            .map(|t| (t * 1024.0 * 1024.0) as u64)
+            .unwrap_or(0);
     }
     // bytes
     q.parse::<u64>().unwrap_or(0) / (1024 * 1024)
@@ -174,6 +177,13 @@ mod tests {
         assert_eq!(mem_mib("1024Ki"), 1);
         assert_eq!(mem_mib("0"), 0);
         assert_eq!(mem_mib("garbage"), 0);
+    }
+
+    #[test]
+    fn parses_fractional_large_memory() {
+        assert_eq!(mem_mib("1.5Gi"), 1536);
+        assert_eq!(mem_mib("2Gi"), 2048);
+        assert_eq!(mem_mib("0.5Ti"), 512 * 1024);
     }
 
     #[test]
