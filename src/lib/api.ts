@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 export interface ContextSummary {
   name: string;
@@ -69,10 +69,42 @@ export interface ContextSpec {
   user: UserSpec;
 }
 
+export interface SessionInfo {
+  version: string;
+  defaultNamespace: string;
+}
+
+export interface PodRow {
+  key: string;
+  name: string;
+  namespace: string;
+  ready: string;
+  status: string;
+  restarts: number;
+  ip: string | null;
+  node: string | null;
+  created: string | null;
+}
+
+export type PodEvent =
+  | { type: "snapshot"; rows: PodRow[] }
+  | { type: "upsert"; rows: PodRow[] }
+  | { type: "delete"; keys: string[] }
+  | { type: "status"; state: string; message: string | null };
+
 export const api = {
   listContexts: () => invoke<KubeconfigView>("list_contexts"),
   getContext: (name: string) => invoke<ContextDetail>("get_context", { name }),
   saveContext: (spec: ContextSpec) => invoke<void>("save_context", { spec }),
   deleteContext: (name: string) => invoke<void>("delete_context", { name }),
   pingContext: (context: string) => invoke<string>("ping_context", { context }),
+  openSession: (tabId: number, context: string) =>
+    invoke<SessionInfo>("open_session", { tabId, context }),
+  closeSession: (tabId: number) => invoke<void>("close_session", { tabId }),
+  listNamespaces: (tabId: number) => invoke<string[]>("list_namespaces", { tabId }),
+  watchPods: (tabId: number, namespace: string | null, onEvent: (e: PodEvent) => void) => {
+    const channel = new Channel<PodEvent>();
+    channel.onmessage = onEvent;
+    return invoke<void>("watch_pods", { tabId, namespace, channel });
+  },
 };
