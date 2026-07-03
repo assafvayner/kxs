@@ -9,6 +9,7 @@
   import { handleClusterKey, clusterKeyHandlers, type ClusterActions } from "../clusterKeys";
   import VirtualList from "./VirtualList.svelte";
   import CommandBar from "./CommandBar.svelte";
+  import ConfirmBar from "./ConfirmBar.svelte";
   import ResourceTableView from "./ResourceTableView.svelte";
   import YamlView from "./YamlView.svelte";
   import DescribeView from "./DescribeView.svelte";
@@ -22,6 +23,15 @@
 
   let destroyed = false;
   let bar = $state<"command" | "filter" | null>(null);
+  let confirm = $state<null | {
+    message: string;
+    kind: "confirm" | "number";
+    run: (value?: number) => Promise<void>;
+  }>(null);
+  let actionError = $state<string | null>(null);
+
+  const SCALABLE_KINDS = ["Deployment", "StatefulSet", "ReplicaSet", "ReplicationController"];
+  const RESTARTABLE_KINDS = ["Deployment", "StatefulSet", "DaemonSet"];
 
   async function connect() {
     s.status = "connecting";
@@ -164,8 +174,77 @@
       pushView({ kind: "logs", namespace: sel.namespace, pod: sel.name });
     },
     enter: () => openDetail("describe"),
+    del: () => {
+      const sel = parseSelected();
+      if (!sel) return;
+      const k = currentKind();
+      confirm = {
+        message: `Delete ${k.kind} ${sel.name}?`,
+        kind: "confirm",
+        run: () => api.deleteResource(tabId, k, sel.namespace, sel.name),
+      };
+    },
+    scale: () => {
+      const sel = parseSelected();
+      if (!sel) return;
+      const k = currentKind();
+      if (!SCALABLE_KINDS.includes(k.kind)) {
+        actionError = `scale not supported for ${k.kind}`;
+        return;
+      }
+      confirm = {
+        message: `Scale ${sel.name} to`,
+        kind: "number",
+        run: (n) => api.scaleResource(tabId, k, sel.namespace, sel.name, n ?? 1),
+      };
+    },
+    restart: () => {
+      const sel = parseSelected();
+      if (!sel) return;
+      const k = currentKind();
+      if (!RESTARTABLE_KINDS.includes(k.kind)) {
+        actionError = `restart not supported for ${k.kind}`;
+        return;
+      }
+      confirm = {
+        message: `Restart rollout of ${sel.name}?`,
+        kind: "confirm",
+        run: () =>
+          api.restartResource(tabId, k, sel.namespace, sel.name, new Date().toISOString()),
+      };
+    },
+    cordon: () => {
+      const sel = parseSelected();
+      if (!sel) return;
+      const k = currentKind();
+      if (k.kind !== "Node" || k.group !== "") {
+        actionError = `cordon not supported for ${k.kind}`;
+        return;
+      }
+      confirm = {
+        message: `Cordon ${sel.name}?`,
+        kind: "confirm",
+        run: () => api.cordonNode(tabId, sel.name, true),
+      };
+    },
     hasSelection: () => s.selected !== null,
   };
+
+  async function onConfirmAccept(value?: number) {
+    if (!confirm) return;
+    const run = confirm.run;
+    try {
+      await run(value);
+      actionError = null;
+    } catch (e) {
+      actionError = String(e);
+    } finally {
+      confirm = null;
+    }
+  }
+  function onConfirmCancel() {
+    confirm = null;
+  }
 
   onMount(() => {
     clusterKeyHandlers.set(tabId, (e) => handleClusterKey(e, actions));
@@ -278,12 +357,27 @@
       <LogsView {tabId} namespace={s.views.top.namespace} pod={s.views.top.pod} />
     {/if}
 
+    {#if actionError}
+      <div class="detail-bar">
+        <span class="st-bad">{actionError}</span>
+        <button onclick={() => (actionError = null)}>Dismiss</button>
+      </div>
+    {/if}
+
     {#if bar !== null}
       <CommandBar
         session={s}
         mode={bar}
         onclose={() => (bar = null)}
         onpick={(k) => pushView({ kind: "resource", resourceKind: k })} />
+    {/if}
+
+    {#if confirm !== null}
+      <ConfirmBar
+        message={confirm.message}
+        kind={confirm.kind}
+        onconfirm={onConfirmAccept}
+        oncancel={onConfirmCancel} />
     {/if}
   {/if}
 </div>

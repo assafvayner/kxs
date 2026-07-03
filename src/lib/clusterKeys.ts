@@ -6,6 +6,10 @@ export interface ClusterActions {
   yaml(): void;
   logs(): void;
   enter(): void;
+  del(): void;
+  scale(): void;
+  restart(): void;
+  cordon(): void;
   hasSelection(): boolean;
 }
 
@@ -19,6 +23,12 @@ export interface ClusterKeyInput {
 
 /** Returns true if it handled the key (caller should not fall through to tab shortcuts). */
 export function handleClusterKey(e: ClusterKeyInput, a: ClusterActions): boolean {
+  if (e.ctrlKey && (e.key === "d" || e.key === "D")) {
+    if (!a.hasSelection()) return false;
+    a.del();
+    e.preventDefault();
+    return true;
+  }
   if (e.metaKey || e.ctrlKey) return false;
   switch (e.key) {
     case ":":
@@ -45,6 +55,21 @@ export function handleClusterKey(e: ClusterKeyInput, a: ClusterActions): boolean
       if (e.key === "d") a.describe();
       else if (e.key === "y") a.yaml();
       else a.logs();
+      e.preventDefault();
+      return true;
+    case "s":
+      if (!a.hasSelection()) return false;
+      a.scale();
+      e.preventDefault();
+      return true;
+    case "r":
+      if (!a.hasSelection()) return false;
+      a.restart();
+      e.preventDefault();
+      return true;
+    case "c":
+      if (!a.hasSelection()) return false;
+      a.cordon();
       e.preventDefault();
       return true;
     default:

@@ -10,6 +10,10 @@ function actions(overrides: Partial<ClusterActions> = {}): ClusterActions {
     yaml: vi.fn(),
     logs: vi.fn(),
     enter: vi.fn(),
+    del: vi.fn(),
+    scale: vi.fn(),
+    restart: vi.fn(),
+    cordon: vi.fn(),
     hasSelection: () => true,
     ...overrides,
   };
@@ -43,5 +47,22 @@ describe("handleClusterKey", () => {
     const a = actions();
     expect(handleClusterKey(ev("t", { metaKey: true }), a)).toBe(false);
     expect(handleClusterKey(ev("x"), a)).toBe(false);
+  });
+  it("ctrl+d deletes with selection", () => {
+    const a = actions();
+    const e = ev("d", { ctrlKey: true });
+    expect(handleClusterKey(e, a)).toBe(true);
+    expect(a.del).toHaveBeenCalled();
+  });
+  it("s/r/c act on selection", () => {
+    const a = actions();
+    handleClusterKey(ev("s"), a); expect(a.scale).toHaveBeenCalled();
+    handleClusterKey(ev("r"), a); expect(a.restart).toHaveBeenCalled();
+    handleClusterKey(ev("c"), a); expect(a.cordon).toHaveBeenCalled();
+  });
+  it("s/r/c/ctrl+d ignored with no selection", () => {
+    const a = actions({ hasSelection: () => false });
+    expect(handleClusterKey(ev("s"), a)).toBe(false);
+    expect(handleClusterKey(ev("d", { ctrlKey: true }), a)).toBe(false);
   });
 });

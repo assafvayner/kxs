@@ -149,3 +149,5 @@ table.events td, table.events th { font-size: 12px; }
 .breadcrumb button { background: none; border: none; color: var(--fg-dim); padding: 2px 4px; }
 .breadcrumb button:hover { color: var(--accent); }
 .breadcrumb .sep { color: var(--fg-dim); }
+.confirmbar { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--border); background: #3b331c; color: var(--fg); }
+.confirmbar input { flex: 0 0 100px; }
