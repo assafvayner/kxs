@@ -19,6 +19,8 @@ pub enum Error {
     NotFound { kind: &'static str, name: String },
     #[error("{kind} \"{name}\" already exists")]
     AlreadyExists { kind: &'static str, name: String },
+    #[error("invalid input: {0}")]
+    Invalid(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

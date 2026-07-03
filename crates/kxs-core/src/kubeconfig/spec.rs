@@ -64,6 +64,63 @@ pub struct UserSpec {
 pub fn apply_context_spec(store: &mut KubeconfigStore, spec: ContextSpec) -> Result<()> {
     let target = spec.target_file.as_ref().map(PathBuf::from);
 
+    // Validate everything upfront: no disk mutation may happen before all checks pass.
+    // A cross-step race can still orphan an upserted cluster/user (accepted; harmless
+    // entries, UI refreshes on error).
+    if spec.name.trim().is_empty() {
+        return Err(Error::Invalid("context name is required".into()));
+    }
+    if let Some(existing) = &spec.cluster.existing {
+        if store.find_cluster(existing).is_none() {
+            return Err(Error::NotFound {
+                kind: "cluster",
+                name: existing.clone(),
+            });
+        }
+    }
+    if let Some(existing) = &spec.user.existing {
+        if store.find_user(existing).is_none() {
+            return Err(Error::NotFound {
+                kind: "user",
+                name: existing.clone(),
+            });
+        }
+    }
+    if let Some(name) = &spec.cluster.name {
+        if spec.cluster.existing.is_none() && name.trim().is_empty() {
+            return Err(Error::Invalid("cluster name is required".into()));
+        }
+    }
+    if let Some(name) = &spec.user.name {
+        if spec.user.existing.is_none() && name.trim().is_empty() {
+            return Err(Error::Invalid("user name is required".into()));
+        }
+    }
+    match &spec.original_name {
+        None => {
+            if store.find_context(&spec.name).is_some() {
+                return Err(Error::AlreadyExists {
+                    kind: "context",
+                    name: spec.name.clone(),
+                });
+            }
+        }
+        Some(orig) => {
+            if store.find_context(orig).is_none() {
+                return Err(Error::NotFound {
+                    kind: "context",
+                    name: orig.clone(),
+                });
+            }
+            if orig != &spec.name && store.find_context(&spec.name).is_some() {
+                return Err(Error::AlreadyExists {
+                    kind: "context",
+                    name: spec.name.clone(),
+                });
+            }
+        }
+    }
+
     let cluster_name = match (&spec.cluster.existing, &spec.cluster.name) {
         (Some(existing), _) => existing.clone(),
         (None, Some(new_name)) => {
@@ -77,12 +134,7 @@ pub fn apply_context_spec(store: &mut KubeconfigStore, spec: ContextSpec) -> Res
             store.upsert_cluster(new_name, cluster, target.as_deref())?;
             new_name.clone()
         }
-        (None, None) => {
-            return Err(Error::NotFound {
-                kind: "cluster",
-                name: "<unspecified>".into(),
-            })
-        }
+        (None, None) => return Err(Error::Invalid("no cluster specified".into())),
     };
 
     let user_name = match (&spec.user.existing, &spec.user.name) {
@@ -118,12 +170,7 @@ pub fn apply_context_spec(store: &mut KubeconfigStore, spec: ContextSpec) -> Res
             store.upsert_user(new_name, user, target.as_deref())?;
             new_name.clone()
         }
-        (None, None) => {
-            return Err(Error::NotFound {
-                kind: "user",
-                name: "<unspecified>".into(),
-            })
-        }
+        (None, None) => return Err(Error::Invalid("no user specified".into())),
     };
 
     match &spec.original_name {
@@ -222,6 +269,54 @@ contexts: [{name: prod, context: {cluster: prod, user: u1}}]
             .find(|c| c.name == "production")
             .unwrap();
         assert_eq!(ctx.namespace.as_deref(), Some("web"));
+    }
+
+    #[test]
+    fn edit_with_missing_cluster_fails_before_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = setup(&dir);
+        let spec: ContextSpec = serde_json::from_str(
+            r#"{"name":"production","originalName":"prod",
+                "cluster":{"existing":"nope"},"user":{"existing":"u1"}}"#,
+        )
+        .unwrap();
+        assert!(apply_context_spec(&mut store, spec).is_err());
+        assert!(
+            store.find_context("prod").is_some(),
+            "rename must not have been committed"
+        );
+        assert!(store.find_context("production").is_none());
+    }
+
+    #[test]
+    fn create_with_new_cluster_and_missing_user_leaves_no_orphan() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, path) = setup(&dir);
+        let spec: ContextSpec = serde_json::from_str(
+            r#"{"name":"x","cluster":{"name":"orphan-c","server":"https://o"},
+                "user":{"existing":"missing-user"}}"#,
+        )
+        .unwrap();
+        assert!(apply_context_spec(&mut store, spec).is_err());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("orphan-c"),
+            "orphaned cluster written: {text}"
+        );
+    }
+
+    #[test]
+    fn empty_names_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = setup(&dir);
+        let spec: ContextSpec = serde_json::from_str(
+            r#"{"name":"  ","cluster":{"existing":"prod"},"user":{"existing":"u1"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            apply_context_spec(&mut store, spec).unwrap_err(),
+            crate::error::Error::Invalid(_)
+        ));
     }
 
     #[test]
