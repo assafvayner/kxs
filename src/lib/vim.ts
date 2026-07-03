@@ -212,6 +212,12 @@ function editKeys(e: KeyInput, text: string, caret: number, st: VimState): VimRe
         st2,
       );
     }
+    case "u": {
+      if (st.undoStack.length === 0) return done(text, caret, st);
+      const undoStack = [...st.undoStack];
+      const snap = undoStack.pop()!;
+      return done(snap.text, snap.caret, { ...st, undoStack });
+    }
     default:
       return done(text, caret, st); // swallow unmapped keys
   }

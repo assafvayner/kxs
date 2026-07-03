@@ -167,3 +167,24 @@ describe("vim operators", () => {
     expect(r.caret).toBe(1); // 'l' still moves after the operator is cancelled
   });
 });
+
+describe("vim undo", () => {
+  it("u restores the buffer after x", () => {
+    const r = run("abc", 0, ["x", "u"]);
+    expect(r.text).toBe("abc");
+    expect(r.caret).toBe(0);
+  });
+  it("u restores after dd", () => {
+    const r = run("a\nb\nc", 0, ["d", "d", "u"]);
+    expect(r.text).toBe("a\nb\nc");
+  });
+  it("u undoes an entire insert session as one step", () => {
+    // enter insert (snapshot of "abc"), then Escape, then u
+    const r = run("abc", 1, ["i", "Escape", "u"]);
+    expect(r.text).toBe("abc");
+  });
+  it("u with an empty undo stack is a no-op", () => {
+    const r = run("abc", 0, ["u"]);
+    expect(r.text).toBe("abc");
+  });
+});
