@@ -152,3 +152,13 @@ pub fn delete_context(name: String, app: AppHandle, state: State<AppState>) -> R
     let _ = app.emit("kubeconfig://changed", ());
     Ok(())
 }
+
+#[tauri::command]
+pub async fn ping_context(context: String, state: State<'_, AppState>) -> Result<String, String> {
+    let yaml = {
+        let store = state.store.lock().unwrap_or_else(|e| e.into_inner());
+        kxs_cluster::bridge::kubeconfig_yaml_for_context(&store, &context)?
+    };
+    let session = kxs_cluster::session::connect(&yaml, &context).await?;
+    kxs_cluster::session::ping(&session, std::time::Duration::from_secs(5)).await
+}

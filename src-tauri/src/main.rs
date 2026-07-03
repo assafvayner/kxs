@@ -21,7 +21,8 @@ fn main() {
             ipc::list_contexts,
             ipc::get_context,
             ipc::save_context,
-            ipc::delete_context
+            ipc::delete_context,
+            ipc::ping_context
         ])
         .setup(move |app| {
             watcher::spawn(app.handle().clone(), paths);

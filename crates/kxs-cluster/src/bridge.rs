@@ -10,20 +10,39 @@ pub fn kubeconfig_yaml_for_context(
     let (_, nc) = store
         .find_context(context)
         .ok_or_else(|| format!("context \"{context}\" not found"))?;
-    let (_, cluster) = store
+    let (cluster_source, cluster) = store
         .find_cluster(&nc.context.cluster)
         .ok_or_else(|| format!("cluster \"{}\" not found", nc.context.cluster))?;
-    let (_, user) = store
+    let (user_source, user) = store
         .find_user(&nc.context.user)
         .ok_or_else(|| format!("user \"{}\" not found", nc.context.user))?;
+    let mut cluster = cluster.clone();
+    let mut user = user.clone();
+    // `Kubeconfig::from_yaml` (unlike `read_from`) has no notion of the file
+    // it came from, so it can't resolve relative cert paths itself. Do it
+    // here against each entry's source file, before we lose that context.
+    absolutize(&mut cluster.cluster.certificate_authority, cluster_source);
+    absolutize(&mut user.user.client_certificate, user_source);
+    absolutize(&mut user.user.client_key, user_source);
     let kc = Kubeconfig {
-        clusters: vec![cluster.clone()],
-        users: vec![user.clone()],
+        clusters: vec![cluster],
+        users: vec![user],
         contexts: vec![nc.clone()],
         current_context: Some(context.to_string()),
         ..Default::default()
     };
     serde_yaml_ng::to_string(&kc).map_err(|e| e.to_string())
+}
+
+fn absolutize(value: &mut Option<String>, source_file: &std::path::Path) {
+    if let Some(v) = value {
+        let p = std::path::Path::new(v);
+        if !p.is_absolute() {
+            if let Some(base) = source_file.parent() {
+                *v = base.join(p).display().to_string();
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +110,34 @@ contexts:
     fn unknown_context_errors() {
         let dir = tempfile::tempdir().unwrap();
         assert!(kubeconfig_yaml_for_context(&store(&dir), "nope").is_err());
+    }
+
+    #[test]
+    fn relative_cert_paths_absolutized() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config");
+        std::fs::write(
+            &p,
+            r#"
+clusters: [{name: c, cluster: {server: "https://c", certificate-authority: certs/ca.crt}}]
+users: [{name: u, user: {client-certificate: certs/client.crt, client-key: /abs/key.pem}}]
+contexts: [{name: ctx, context: {cluster: c, user: u}}]
+"#,
+        )
+        .unwrap();
+        let store = KubeconfigStore::load(vec![p]).unwrap();
+        let yaml = kubeconfig_yaml_for_context(&store, "ctx").unwrap();
+        let expected_ca = dir.path().join("certs/ca.crt").display().to_string();
+        assert!(yaml.contains(&expected_ca), "CA not absolutized: {yaml}");
+        let expected_cert = dir.path().join("certs/client.crt").display().to_string();
+        assert!(
+            yaml.contains(&expected_cert),
+            "client cert not absolutized: {yaml}"
+        );
+        assert!(
+            yaml.contains("/abs/key.pem"),
+            "absolute path must be untouched: {yaml}"
+        );
     }
 
     #[test]

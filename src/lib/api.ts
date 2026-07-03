@@ -74,4 +74,5 @@ export const api = {
   getContext: (name: string) => invoke<ContextDetail>("get_context", { name }),
   saveContext: (spec: ContextSpec) => invoke<void>("save_context", { spec }),
   deleteContext: (name: string) => invoke<void>("delete_context", { name }),
+  pingContext: (context: string) => invoke<string>("ping_context", { context }),
 };

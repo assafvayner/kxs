@@ -76,3 +76,11 @@ tr.clickable:hover td { background: var(--bg-hover); }
 .form label.radio { display: inline-flex; gap: 6px; margin-right: 16px; align-items: center; }
 .form .reveal { display: flex; gap: 8px; margin-top: 4px; }
 .form .reveal input { flex: 1; margin-top: 0; }
+
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+.dot.ok { background: var(--green); }
+.dot.fail { background: var(--red); }
+.dot.busy { background: var(--yellow); animation: pulse 1s infinite alternate; }
+@keyframes pulse { from { opacity: 0.4; } to { opacity: 1; } }
+.ping-btn { background: none; border: none; padding: 0; color: var(--fg-dim); font-size: 13px; }
+.ping-btn:hover { color: var(--accent); background: none; border: none; }
