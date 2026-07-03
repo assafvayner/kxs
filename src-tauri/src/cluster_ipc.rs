@@ -259,3 +259,132 @@ pub async fn get_resource_events(
             .await,
     )
 }
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_resource_yaml(
+    tab_id: u32,
+    group: String,
+    version: String,
+    kind: String,
+    plural: String,
+    namespace: Option<String>,
+    name: String,
+    yaml: String,
+    dry_run: bool,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = session_of(&sessions, tab_id).await?;
+    kxs_cluster::edit::apply_yaml(
+        session.client.clone(),
+        &group,
+        &version,
+        &kind,
+        &plural,
+        namespace.as_deref(),
+        &name,
+        &yaml,
+        dry_run,
+    )
+    .await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn delete_resource(
+    tab_id: u32,
+    group: String,
+    version: String,
+    kind: String,
+    plural: String,
+    namespace: Option<String>,
+    name: String,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = session_of(&sessions, tab_id).await?;
+    kxs_cluster::edit::delete_resource(
+        session.client.clone(),
+        &group,
+        &version,
+        &kind,
+        &plural,
+        namespace.as_deref(),
+        &name,
+    )
+    .await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn scale_resource(
+    tab_id: u32,
+    group: String,
+    version: String,
+    kind: String,
+    plural: String,
+    namespace: Option<String>,
+    name: String,
+    replicas: i32,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = session_of(&sessions, tab_id).await?;
+    kxs_cluster::edit::merge_patch(
+        session.client.clone(),
+        &group,
+        &version,
+        &kind,
+        &plural,
+        namespace.as_deref(),
+        &name,
+        kxs_cluster::edit::scale_patch(replicas),
+    )
+    .await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn restart_resource(
+    tab_id: u32,
+    group: String,
+    version: String,
+    kind: String,
+    plural: String,
+    namespace: Option<String>,
+    name: String,
+    restarted_at: String,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = session_of(&sessions, tab_id).await?;
+    kxs_cluster::edit::merge_patch(
+        session.client.clone(),
+        &group,
+        &version,
+        &kind,
+        &plural,
+        namespace.as_deref(),
+        &name,
+        kxs_cluster::edit::restart_patch(&restarted_at),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn cordon_node(
+    tab_id: u32,
+    name: String,
+    unschedulable: bool,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let session = session_of(&sessions, tab_id).await?;
+    kxs_cluster::edit::merge_patch(
+        session.client.clone(),
+        "",
+        "v1",
+        "Node",
+        "nodes",
+        None,
+        &name,
+        kxs_cluster::edit::cordon_patch(unschedulable),
+    )
+    .await
+}

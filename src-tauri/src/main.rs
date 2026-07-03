@@ -35,7 +35,12 @@ fn main() {
             cluster_ipc::list_resource_kinds,
             cluster_ipc::list_resource_table,
             cluster_ipc::get_resource_yaml,
-            cluster_ipc::get_resource_events
+            cluster_ipc::get_resource_events,
+            cluster_ipc::apply_resource_yaml,
+            cluster_ipc::delete_resource,
+            cluster_ipc::scale_resource,
+            cluster_ipc::restart_resource,
+            cluster_ipc::cordon_node
         ])
         .setup(move |app| {
             watcher::spawn(app.handle().clone(), paths);
