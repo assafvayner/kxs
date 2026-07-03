@@ -1,0 +1,197 @@
+import type { KeyInput } from "./keys";
+
+export type VimMode = "normal" | "insert" | "ex" | "search";
+
+export interface VimState {
+  mode: VimMode;
+  op: "d" | "c" | "y" | null;
+  pending: string;
+  exBuf: string;
+  searchBuf: string;
+  lastSearch: string;
+  register: string;
+  regLinewise: boolean;
+  undoStack: Array<{ text: string; caret: number }>;
+}
+
+export type VimEffect = "apply" | undefined;
+
+export interface VimResult {
+  text: string;
+  caret: number;
+  state: VimState;
+  handled: boolean;
+  effect?: VimEffect;
+}
+
+const UNDO_CAP = 200;
+
+export function initialVimState(): VimState {
+  return {
+    mode: "normal",
+    op: null,
+    pending: "",
+    exBuf: "",
+    searchBuf: "",
+    lastSearch: "",
+    register: "",
+    regLinewise: false,
+    undoStack: [],
+  };
+}
+
+// --- offset/line helpers ---------------------------------------------------
+
+function lineStartOf(text: string, pos: number): number {
+  return text.lastIndexOf("\n", pos - 1) + 1;
+}
+function lineEndOf(text: string, pos: number): number {
+  const nl = text.indexOf("\n", pos);
+  return nl === -1 ? text.length : nl;
+}
+function colOf(text: string, pos: number): number {
+  return pos - lineStartOf(text, pos);
+}
+
+function charClass(c: string): 0 | 1 | 2 {
+  if (/\s/.test(c)) return 0;
+  if (/\w/.test(c)) return 1;
+  return 2;
+}
+function wordForward(text: string, caret: number): number {
+  const n = text.length;
+  let i = caret;
+  if (i >= n) return n;
+  const cls = charClass(text[i]);
+  if (cls !== 0) while (i < n && charClass(text[i]) === cls) i++;
+  while (i < n && charClass(text[i]) === 0) i++;
+  return i;
+}
+function wordBackward(text: string, caret: number): number {
+  let i = caret - 1;
+  while (i >= 0 && charClass(text[i]) === 0) i--;
+  if (i < 0) return 0;
+  const cls = charClass(text[i]);
+  while (i >= 0 && charClass(text[i]) === cls) i--;
+  return i + 1;
+}
+
+function snapshot(st: VimState, text: string, caret: number): VimState {
+  const undoStack = [...st.undoStack, { text, caret }];
+  if (undoStack.length > UNDO_CAP) undoStack.shift();
+  return { ...st, undoStack };
+}
+
+// --- result builders -------------------------------------------------------
+
+function pass(text: string, caret: number, st: VimState): VimResult {
+  return { text, caret, state: st, handled: false };
+}
+function done(text: string, caret: number, st: VimState, effect?: VimEffect): VimResult {
+  return { text, caret, state: st, handled: true, effect };
+}
+
+// --- dispatcher ------------------------------------------------------------
+
+export function vimKey(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
+  switch (st.mode) {
+    case "insert":
+      return handleInsert(e, text, caret, st);
+    case "ex":
+      return handleEx(e, text, caret, st);
+    case "search":
+      return handleSearch(e, text, caret, st);
+    default:
+      return handleNormal(e, text, caret, st);
+  }
+}
+
+function handleInsert(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
+  if (e.key === "Escape") return done(text, caret, { ...st, mode: "normal", pending: "" });
+  return pass(text, caret, st); // native typing / shortcuts
+}
+
+function handleNormal(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
+  if (e.metaKey || e.ctrlKey) return pass(text, caret, st);
+  if (e.key.length !== 1 && e.key !== "Escape") return pass(text, caret, st);
+
+  if (st.op) return handleOperator(e, text, caret, st); // filled in Task 6
+
+  // pending "g" (for gg)
+  if (st.pending === "g") {
+    const cleared = { ...st, pending: "" };
+    if (e.key === "g") return done(text, 0, cleared);
+    return handleNormal(e, text, caret, cleared);
+  }
+
+  const ls = lineStartOf(text, caret);
+  const le = lineEndOf(text, caret);
+  switch (e.key) {
+    case "h":
+      return done(text, Math.max(ls, caret - 1), st);
+    case "l":
+      return done(text, Math.min(le, caret + 1), st);
+    case "j":
+      return done(text, moveDown(text, caret), st);
+    case "k":
+      return done(text, moveUp(text, caret), st);
+    case "0":
+      return done(text, ls, st);
+    case "$":
+      return done(text, le, st);
+    case "G":
+      return done(text, lineStartOf(text, text.length), st);
+    case "g":
+      return done(text, caret, { ...st, pending: "g" });
+    case "w":
+      return done(text, wordForward(text, caret), st);
+    case "b":
+      return done(text, wordBackward(text, caret), st);
+    case "i":
+      return done(text, caret, snapshot({ ...st, mode: "insert" }, text, caret));
+    case "a":
+      return done(text, Math.min(le, caret + 1), snapshot({ ...st, mode: "insert" }, text, caret));
+    case "o": {
+      const st2 = snapshot({ ...st, mode: "insert" }, text, caret);
+      return done(text.slice(0, le) + "\n" + text.slice(le), le + 1, st2);
+    }
+    case "O": {
+      const st2 = snapshot({ ...st, mode: "insert" }, text, caret);
+      return done(text.slice(0, ls) + "\n" + text.slice(ls), ls, st2);
+    }
+    case "Escape":
+      return done(text, caret, { ...st, pending: "", op: null });
+    default:
+      return editKeys(e, text, caret, st); // x/dd/yy/p/u etc., filled in Tasks 5/7
+  }
+}
+
+function moveDown(text: string, caret: number): number {
+  const le = lineEndOf(text, caret);
+  if (le === text.length) return caret;
+  const nextStart = le + 1;
+  const nextEnd = lineEndOf(text, nextStart);
+  return Math.min(nextStart + colOf(text, caret), nextEnd);
+}
+function moveUp(text: string, caret: number): number {
+  const ls = lineStartOf(text, caret);
+  if (ls === 0) return caret;
+  const prevStart = lineStartOf(text, ls - 1);
+  const prevEnd = ls - 1;
+  return Math.min(prevStart + colOf(text, caret), prevEnd);
+}
+
+// --- stubs filled in later tasks -------------------------------------------
+
+function editKeys(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
+  return done(text, caret, st); // swallow unmapped normal-mode keys (no-op)
+}
+function handleOperator(_e: KeyInput, text: string, caret: number, st: VimState): VimResult {
+  return done(text, caret, { ...st, op: null });
+}
+function handleEx(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
+  return done(text, caret, { ...st, mode: "normal", exBuf: "" });
+}
+function handleSearch(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
+  return done(text, caret, { ...st, mode: "normal", searchBuf: "" });
+}
