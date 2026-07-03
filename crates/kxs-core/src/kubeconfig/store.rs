@@ -151,6 +151,258 @@ impl KubeconfigStore {
                 .map(|c| (f.path.as_path(), c))
         })
     }
+
+    /// Where new entries go when no target is given: ~/.kube/config if loaded,
+    /// else the first loaded file.
+    pub fn default_target(&self) -> PathBuf {
+        if let Some(hd) = crate::kubeconfig::paths::default_kubeconfig_path() {
+            if self.files.iter().any(|f| f.path == hd) {
+                return hd;
+            }
+        }
+        self.files
+            .first()
+            .map(|f| f.path.clone())
+            .or_else(crate::kubeconfig::paths::default_kubeconfig_path)
+            .expect("no kubeconfig path available")
+    }
+
+    /// Read the target file fresh from disk, apply `op`, write back, refresh memory.
+    fn mutate<F>(&mut self, path: &Path, op: F) -> Result<()>
+    where
+        F: FnOnce(&mut Kubeconfig) -> Result<()>,
+    {
+        let mut file = crate::kubeconfig::io::read_file(path)?;
+        op(&mut file.config)?;
+        crate::kubeconfig::io::write_file(&file)?;
+        let fresh = crate::kubeconfig::io::read_file(path)?;
+        match self.files.iter_mut().find(|f| f.path == path) {
+            Some(f) => *f = fresh,
+            None => self.files.push(fresh),
+        }
+        Ok(())
+    }
+
+    pub fn upsert_cluster(
+        &mut self,
+        name: &str,
+        mut cluster: Cluster,
+        target: Option<&Path>,
+    ) -> Result<()> {
+        let found = self
+            .find_cluster(name)
+            .map(|(p, c)| (p.to_path_buf(), c.cluster.extras.clone()));
+        if let Some((path, extras)) = found {
+            cluster.extras = extras; // preserve unknown fields on edit
+            let name = name.to_string();
+            return self.mutate(&path, move |cfg| {
+                let entry = cfg
+                    .clusters
+                    .iter_mut()
+                    .rev()
+                    .find(|c| c.name == name)
+                    .ok_or_else(|| crate::error::Error::NotFound {
+                        kind: "cluster",
+                        name: name.clone(),
+                    })?;
+                entry.cluster = cluster;
+                Ok(())
+            });
+        }
+        let target = target
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.default_target());
+        let name = name.to_string();
+        self.mutate(&target, move |cfg| {
+            cfg.clusters.push(NamedCluster {
+                name,
+                cluster,
+                extras: Extras::new(),
+            });
+            Ok(())
+        })
+    }
+
+    pub fn upsert_user(
+        &mut self,
+        name: &str,
+        mut user: AuthInfo,
+        target: Option<&Path>,
+    ) -> Result<()> {
+        let found = self
+            .find_user(name)
+            .map(|(p, u)| (p.to_path_buf(), u.user.extras.clone()));
+        if let Some((path, extras)) = found {
+            user.extras = extras;
+            let name = name.to_string();
+            return self.mutate(&path, move |cfg| {
+                let entry = cfg
+                    .users
+                    .iter_mut()
+                    .rev()
+                    .find(|u| u.name == name)
+                    .ok_or_else(|| crate::error::Error::NotFound {
+                        kind: "user",
+                        name: name.clone(),
+                    })?;
+                entry.user = user;
+                Ok(())
+            });
+        }
+        let target = target
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.default_target());
+        let name = name.to_string();
+        self.mutate(&target, move |cfg| {
+            cfg.users.push(NamedAuthInfo {
+                name,
+                user,
+                extras: Extras::new(),
+            });
+            Ok(())
+        })
+    }
+
+    pub fn create_context(
+        &mut self,
+        name: &str,
+        cluster: &str,
+        user: &str,
+        namespace: Option<String>,
+        target: Option<&Path>,
+    ) -> Result<()> {
+        if self.find_context(name).is_some() {
+            return Err(crate::error::Error::AlreadyExists {
+                kind: "context",
+                name: name.into(),
+            });
+        }
+        if self.find_cluster(cluster).is_none() {
+            return Err(crate::error::Error::NotFound {
+                kind: "cluster",
+                name: cluster.into(),
+            });
+        }
+        if self.find_user(user).is_none() {
+            return Err(crate::error::Error::NotFound {
+                kind: "user",
+                name: user.into(),
+            });
+        }
+        let target = target
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.default_target());
+        let (name, cluster, user) = (name.to_string(), cluster.to_string(), user.to_string());
+        self.mutate(&target, move |cfg| {
+            cfg.contexts.push(NamedContext {
+                name,
+                context: Context {
+                    cluster,
+                    user,
+                    namespace,
+                    extras: Extras::new(),
+                },
+                extras: Extras::new(),
+            });
+            Ok(())
+        })
+    }
+
+    pub fn update_context(
+        &mut self,
+        name: &str,
+        cluster: &str,
+        user: &str,
+        namespace: Option<String>,
+    ) -> Result<()> {
+        let path = self
+            .find_context(name)
+            .map(|(p, _)| p.to_path_buf())
+            .ok_or_else(|| crate::error::Error::NotFound {
+                kind: "context",
+                name: name.into(),
+            })?;
+        if self.find_cluster(cluster).is_none() {
+            return Err(crate::error::Error::NotFound {
+                kind: "cluster",
+                name: cluster.into(),
+            });
+        }
+        if self.find_user(user).is_none() {
+            return Err(crate::error::Error::NotFound {
+                kind: "user",
+                name: user.into(),
+            });
+        }
+        let (name, cluster, user) = (name.to_string(), cluster.to_string(), user.to_string());
+        self.mutate(&path, move |cfg| {
+            let entry = cfg
+                .contexts
+                .iter_mut()
+                .rev()
+                .find(|c| c.name == name)
+                .ok_or_else(|| crate::error::Error::NotFound {
+                    kind: "context",
+                    name: name.clone(),
+                })?;
+            entry.context.cluster = cluster;
+            entry.context.user = user;
+            entry.context.namespace = namespace;
+            Ok(())
+        })
+    }
+
+    pub fn rename_context(&mut self, old: &str, new: &str) -> Result<()> {
+        if self.find_context(new).is_some() {
+            return Err(crate::error::Error::AlreadyExists {
+                kind: "context",
+                name: new.into(),
+            });
+        }
+        let path = self
+            .find_context(old)
+            .map(|(p, _)| p.to_path_buf())
+            .ok_or_else(|| crate::error::Error::NotFound {
+                kind: "context",
+                name: old.into(),
+            })?;
+        let (old, new) = (old.to_string(), new.to_string());
+        self.mutate(&path, move |cfg| {
+            let entry = cfg
+                .contexts
+                .iter_mut()
+                .rev()
+                .find(|c| c.name == old)
+                .ok_or_else(|| crate::error::Error::NotFound {
+                    kind: "context",
+                    name: old.clone(),
+                })?;
+            entry.name = new.clone();
+            if cfg.current_context.as_deref() == Some(old.as_str()) {
+                cfg.current_context = Some(new);
+            }
+            Ok(())
+        })
+    }
+
+    /// Removes only the context entry. Cluster/user entries are never cascaded.
+    pub fn delete_context(&mut self, name: &str) -> Result<()> {
+        let path = self
+            .find_context(name)
+            .map(|(p, _)| p.to_path_buf())
+            .ok_or_else(|| crate::error::Error::NotFound {
+                kind: "context",
+                name: name.into(),
+            })?;
+        let name = name.to_string();
+        self.mutate(&path, move |cfg| {
+            cfg.contexts.retain(|c| c.name != name);
+            if cfg.current_context.as_deref() == Some(name.as_str()) {
+                cfg.current_context = None;
+            }
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -277,5 +529,146 @@ contexts: [{name: x, context: {cluster: c1, user: u, namespace: one}}, {name: x,
         let ctxs = store.contexts();
         assert_eq!(ctxs.len(), 1);
         assert_eq!(ctxs[0].namespace.as_deref(), Some("two"));
+    }
+
+    fn store_ab(dir: &tempfile::TempDir) -> (KubeconfigStore, PathBuf, PathBuf) {
+        let a = write(dir, "a.yaml", FILE_A);
+        let b = write(dir, "b.yaml", FILE_B);
+        let store = KubeconfigStore::load(vec![a.clone(), b.clone()]).unwrap();
+        (store, a, b)
+    }
+
+    #[test]
+    fn upsert_cluster_updates_in_place_preserving_extras() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, a, _) = store_ab(&dir);
+        let new = Cluster {
+            server: Some("https://new".into()),
+            ..Default::default()
+        };
+        store.upsert_cluster("prod", new, None).unwrap();
+        let text = std::fs::read_to_string(&a).unwrap();
+        assert!(text.contains("https://new"));
+        assert!(
+            text.contains("my-extra"),
+            "extras must survive edits: {text}"
+        );
+        assert_eq!(
+            store
+                .find_cluster("prod")
+                .unwrap()
+                .1
+                .cluster
+                .server
+                .as_deref(),
+            Some("https://new")
+        );
+    }
+
+    #[test]
+    fn upsert_cluster_inserts_new_into_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, b) = store_ab(&dir);
+        let c = Cluster {
+            server: Some("https://c".into()),
+            ..Default::default()
+        };
+        store.upsert_cluster("brand-new", c, Some(&b)).unwrap();
+        let text = std::fs::read_to_string(&b).unwrap();
+        assert!(text.contains("brand-new"));
+        assert_eq!(store.find_cluster("brand-new").unwrap().0, b.as_path());
+    }
+
+    #[test]
+    fn create_context_validates_and_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, a, _) = store_ab(&dir);
+        let err = store
+            .create_context("prod", "prod", "u1", None, None)
+            .unwrap_err();
+        assert!(matches!(err, crate::error::Error::AlreadyExists { .. }));
+        let err = store
+            .create_context("x", "nope", "u1", None, None)
+            .unwrap_err();
+        assert!(matches!(err, crate::error::Error::NotFound { .. }));
+        store
+            .create_context("staging", "dev", "u1", Some("web".into()), None)
+            .unwrap();
+        let ctxs = store.contexts();
+        let staging = ctxs.iter().find(|c| c.name == "staging").unwrap();
+        assert_eq!(staging.source, a);
+        assert_eq!(staging.namespace.as_deref(), Some("web"));
+    }
+
+    #[test]
+    fn create_context_into_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, _) = store_ab(&dir);
+        let fresh = dir.path().join("fresh.yaml");
+        store
+            .create_context("iso", "dev", "u2", None, Some(&fresh))
+            .unwrap();
+        assert!(fresh.exists());
+        assert_eq!(store.find_context("iso").unwrap().0, fresh.as_path());
+    }
+
+    #[test]
+    fn rename_context_updates_current_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, a, _) = store_ab(&dir);
+        let err = store.rename_context("prod", "dev").unwrap_err();
+        assert!(matches!(err, crate::error::Error::AlreadyExists { .. }));
+        store.rename_context("prod", "production").unwrap();
+        let text = std::fs::read_to_string(&a).unwrap();
+        assert!(text.contains("current-context: production"));
+        assert!(store.find_context("production").is_some());
+        assert!(
+            store.find_context("prod").is_some(),
+            "file B's prod context is now unmasked"
+        );
+    }
+
+    #[test]
+    fn update_context_rebinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, _) = store_ab(&dir);
+        store.update_context("prod", "dev", "u2", None).unwrap();
+        let (_, ctx) = store.find_context("prod").unwrap();
+        assert_eq!(ctx.context.cluster, "dev");
+        assert_eq!(ctx.context.user, "u2");
+        assert_eq!(ctx.context.namespace, None);
+    }
+
+    #[test]
+    fn delete_context_no_cascade_clears_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, a, _) = store_ab(&dir);
+        store.delete_context("prod").unwrap();
+        let text = std::fs::read_to_string(&a).unwrap();
+        assert!(!text.contains("current-context"));
+        assert!(
+            text.contains("name: prod"),
+            "cluster/user entries must remain: {text}"
+        );
+        assert!(store.find_context("prod").is_some());
+    }
+
+    #[test]
+    fn mutation_does_not_clobber_external_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, a, _) = store_ab(&dir);
+        let mut on_disk = crate::kubeconfig::io::read_file(&a).unwrap();
+        on_disk.config.clusters.push(NamedCluster {
+            name: "external".into(),
+            cluster: Cluster {
+                server: Some("https://ext".into()),
+                ..Default::default()
+            },
+            extras: Extras::new(),
+        });
+        crate::kubeconfig::io::write_file(&on_disk).unwrap();
+        store.delete_context("prod").unwrap();
+        let text = std::fs::read_to_string(&a).unwrap();
+        assert!(text.contains("external"), "external edit clobbered: {text}");
     }
 }
