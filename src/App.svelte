@@ -7,6 +7,7 @@
   import { tabs } from "./lib/stores/tabs.svelte";
   import { contexts } from "./lib/stores/contexts.svelte";
   import { handleKeydown, isEditableTarget } from "./lib/keys";
+  import { clusterKeyHandlers } from "./lib/clusterKeys";
 
   onMount(() => {
     contexts.refresh();
@@ -19,6 +20,8 @@
   function onKeydown(e: KeyboardEvent) {
     // shortcuts must not fire while typing; ctrl+tab cycling is always safe
     if (isEditableTarget(e.target) && !(e.ctrlKey && e.key === "Tab")) return;
+    // active cluster tab gets first crack at cluster keys via a per-tab handler
+    if (tabs.activeId !== null && clusterKeyHandlers.get(tabs.activeId)?.(e)) return;
     handleKeydown(e, tabs);
   }
 </script>

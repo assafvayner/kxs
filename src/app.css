@@ -133,3 +133,16 @@ tr.clickable:hover td { background: var(--bg-hover); }
 .chk { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-dim); font-size: 13px; }
 .events-h { margin: 16px 0 8px; font-size: 13px; color: var(--accent); }
 table.events td, table.events th { font-size: 12px; }
+.pod-row:not(.pod-head) { cursor: pointer; }
+.pod-row:not(.pod-head):hover { background: var(--bg-hover); }
+.pod-row.selected { background: var(--bg-active); }
+.cmdbar { position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-top: 1px solid var(--border); background: var(--bg-raised); }
+.cmdbar .sigil { color: var(--accent); font-family: ui-monospace, monospace; }
+.cmdbar input { flex: 1; }
+.suggest { position: absolute; bottom: 100%; left: 16px; right: 16px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 6px; max-height: 240px; overflow: auto; }
+.sug { display: flex; justify-content: space-between; width: 100%; background: none; border: none; border-radius: 0; padding: 6px 12px; }
+.sug:hover { background: var(--bg-hover); }
+.breadcrumb { display: flex; gap: 6px; align-items: center; }
+.breadcrumb button { background: none; border: none; color: var(--fg-dim); padding: 2px 4px; }
+.breadcrumb button:hover { color: var(--accent); }
+.breadcrumb .sep { color: var(--fg-dim); }

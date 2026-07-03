@@ -1,11 +1,18 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "../api";
+  import type { PodRow, ResourceKind } from "../api";
   import { sessions, TabSession } from "../stores/sessions.svelte";
+  import type { View } from "../stores/viewstack.svelte";
   import { now } from "../stores/now.svelte";
   import { age } from "../age";
+  import { handleClusterKey, clusterKeyHandlers, type ClusterActions } from "../clusterKeys";
   import VirtualList from "./VirtualList.svelte";
-  import type { PodRow } from "../api";
+  import CommandBar from "./CommandBar.svelte";
+  import ResourceTableView from "./ResourceTableView.svelte";
+  import YamlView from "./YamlView.svelte";
+  import DescribeView from "./DescribeView.svelte";
+  import LogsView from "./LogsView.svelte";
 
   let { context, tabId }: { context: string; tabId: number } = $props();
 
@@ -14,6 +21,7 @@
   sessions.set(tabId, s);
 
   let destroyed = false;
+  let bar = $state<"command" | "filter" | null>(null);
 
   async function connect() {
     s.status = "connecting";
@@ -30,6 +38,10 @@
       api
         .listNamespaces(tabId)
         .then((ns) => (s.namespaces = ns.sort()))
+        .catch(() => {});
+      api
+        .listResourceKinds(tabId)
+        .then((k) => (s.kinds = k))
         .catch(() => {});
       await startWatch();
     } catch (e) {
@@ -60,9 +72,103 @@
     startWatch();
   }
 
-  onMount(connect);
+  const POD_KIND: ResourceKind = {
+    group: "",
+    version: "v1",
+    kind: "Pod",
+    plural: "pods",
+    namespaced: true,
+    aliases: ["po", "pod", "pods"],
+  };
+
+  function currentKind(): ResourceKind {
+    const top = s.views.top;
+    return top.kind === "resource" ? top.resourceKind : POD_KIND;
+  }
+
+  function parseSelected(): { namespace: string | null; name: string } | null {
+    if (s.selected === null) return null;
+    const i = s.selected.indexOf("/");
+    if (i === -1) return { namespace: null, name: s.selected };
+    return { namespace: s.selected.slice(0, i), name: s.selected.slice(i + 1) };
+  }
+
+  function pushView(v: View) {
+    s.selected = null;
+    s.views.push(v);
+  }
+  function popView() {
+    s.selected = null;
+    s.views.pop();
+  }
+  function popTo(i: number) {
+    while (s.views.depth > i + 1) s.views.pop();
+    s.selected = null;
+  }
+
+  function viewLabel(v: View): string {
+    switch (v.kind) {
+      case "pods":
+        return "pods";
+      case "resource":
+        return v.resourceKind.kind;
+      case "yaml":
+      case "describe":
+        return v.title;
+      case "logs":
+        return `logs: ${v.pod}`;
+    }
+  }
+
+  async function openDetail(kind: "yaml" | "describe") {
+    const sel = parseSelected();
+    if (!sel) return;
+    const k = currentKind();
+    try {
+      const body = await api.getResourceYaml(tabId, k, sel.namespace, sel.name);
+      if (kind === "yaml") {
+        pushView({ kind: "yaml", title: `${k.kind} ${sel.name}`, body });
+      } else {
+        pushView({
+          kind: "describe",
+          title: `${k.kind} ${sel.name}`,
+          namespace: sel.namespace,
+          name: sel.name,
+          body,
+        });
+      }
+    } catch {
+      /* selection may be stale; ignore */
+    }
+  }
+
+  const actions: ClusterActions = {
+    openCommand: () => (bar = "command"),
+    openFilter: () => (bar = "filter"),
+    back: () => {
+      if (bar) bar = null;
+      else popView();
+    },
+    describe: () => openDetail("describe"),
+    yaml: () => openDetail("yaml"),
+    logs: () => {
+      const k = currentKind();
+      if (k.kind !== "Pod" || k.group !== "") return;
+      const sel = parseSelected();
+      if (!sel || sel.namespace === null) return;
+      pushView({ kind: "logs", namespace: sel.namespace, pod: sel.name });
+    },
+    enter: () => openDetail("describe"),
+    hasSelection: () => s.selected !== null,
+  };
+
+  onMount(() => {
+    clusterKeyHandlers.set(tabId, (e) => handleClusterKey(e, actions));
+    connect();
+  });
   onDestroy(() => {
     destroyed = true;
+    clusterKeyHandlers.delete(tabId);
     api.closeSession(tabId).catch(() => {});
     sessions.delete(tabId);
   });
@@ -100,32 +206,75 @@
           {/each}
         </select>
       </label>
+      <nav class="breadcrumb">
+        {#each s.views.stack as v, i (i)}
+          {#if i > 0}<span class="sep">/</span>{/if}
+          <button type="button" onclick={() => popTo(i)}>{viewLabel(v)}</button>
+        {/each}
+      </nav>
       <span class="spacer"></span>
-      <span class="dim">
-        {s.pods.rows.length} pods
-        {#if s.watchState === "reconnecting"}· <span class="st-warn">reconnecting…</span>{/if}
-        {#if s.watchState === "starting"}· loading…{/if}
-      </span>
+      {#if s.views.top.kind === "pods"}
+        <span class="dim">
+          {s.pods.rows.length} pods
+          {#if s.watchState === "reconnecting"}· <span class="st-warn">reconnecting…</span>{/if}
+          {#if s.watchState === "starting"}· loading…{/if}
+        </span>
+      {/if}
     </div>
-    <div class="pod-table">
-      <div class="pod-row pod-head">
-        <span>NAMESPACE</span><span>NAME</span><span>READY</span><span>STATUS</span>
-        <span>RESTARTS</span><span>IP</span><span>NODE</span><span>AGE</span>
+
+    {#if s.views.top.kind === "pods"}
+      <div class="pod-table">
+        <div class="pod-row pod-head">
+          <span>NAMESPACE</span><span>NAME</span><span>READY</span><span>STATUS</span>
+          <span>RESTARTS</span><span>IP</span><span>NODE</span><span>AGE</span>
+        </div>
+        <VirtualList items={s.pods.rows} itemHeight={28}>
+          {#snippet row(pod: PodRow)}
+            <div
+              class="pod-row"
+              class:selected={s.selected === pod.key}
+              role="button"
+              tabindex="0"
+              onclick={() => (s.selected = pod.key)}
+              onkeydown={(e) => {
+                if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                  e.preventDefault();
+                  s.selected = pod.key;
+                }
+              }}>
+              <span class="dim">{pod.namespace}</span>
+              <span>{pod.name}</span>
+              <span>{pod.ready}</span>
+              <span class={statusClass(pod.status)}>{pod.status}</span>
+              <span>{pod.restarts}</span>
+              <span class="mono dim">{pod.ip ?? "—"}</span>
+              <span class="dim">{pod.node ?? "—"}</span>
+              <span>{age(pod.created, now.ms)}</span>
+            </div>
+          {/snippet}
+        </VirtualList>
       </div>
-      <VirtualList items={s.pods.rows} itemHeight={28}>
-        {#snippet row(pod: PodRow)}
-          <div class="pod-row">
-            <span class="dim">{pod.namespace}</span>
-            <span>{pod.name}</span>
-            <span>{pod.ready}</span>
-            <span class={statusClass(pod.status)}>{pod.status}</span>
-            <span>{pod.restarts}</span>
-            <span class="mono dim">{pod.ip ?? "—"}</span>
-            <span class="dim">{pod.node ?? "—"}</span>
-            <span>{age(pod.created, now.ms)}</span>
-          </div>
-        {/snippet}
-      </VirtualList>
-    </div>
+    {:else if s.views.top.kind === "resource"}
+      <ResourceTableView {tabId} session={s} resourceKind={s.views.top.resourceKind} />
+    {:else if s.views.top.kind === "yaml"}
+      <YamlView title={s.views.top.title} body={s.views.top.body} />
+    {:else if s.views.top.kind === "describe"}
+      <DescribeView
+        {tabId}
+        title={s.views.top.title}
+        namespace={s.views.top.namespace}
+        name={s.views.top.name}
+        body={s.views.top.body} />
+    {:else if s.views.top.kind === "logs"}
+      <LogsView {tabId} namespace={s.views.top.namespace} pod={s.views.top.pod} />
+    {/if}
+
+    {#if bar !== null}
+      <CommandBar
+        session={s}
+        mode={bar}
+        onclose={() => (bar = null)}
+        onpick={(k) => pushView({ kind: "resource", resourceKind: k })} />
+    {/if}
   {/if}
 </div>
