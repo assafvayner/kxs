@@ -1,0 +1,37 @@
+import type { ResourceKind } from "./api";
+
+export function resolveKind(kinds: ResourceKind[], query: string): ResourceKind | null {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  return kinds.find((k) => k.aliases.includes(q) || k.kind.toLowerCase() === q || k.plural === q) ?? null;
+}
+
+export function fuzzyKinds(kinds: ResourceKind[], query: string): ResourceKind[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return kinds;
+  const score = (k: ResourceKind): number => {
+    if (k.aliases.includes(q)) return 0;
+    if (k.kind.toLowerCase().startsWith(q) || k.plural.startsWith(q)) return 1;
+    if (k.kind.toLowerCase().includes(q) || k.aliases.some((a) => a.includes(q))) return 2;
+    return 99;
+  };
+  return kinds
+    .map((k) => [k, score(k)] as const)
+    .filter(([, s]) => s < 99)
+    .sort((a, b) => a[1] - b[1] || a[0].kind.localeCompare(b[0].kind))
+    .map(([k]) => k);
+}
+
+/** Substring by default; `-r <regex>` for regex. Invalid regex → no match. */
+export function matchRow(name: string, filter: string): boolean {
+  const f = filter.trim();
+  if (!f) return true;
+  if (f.startsWith("-r ")) {
+    try {
+      return new RegExp(f.slice(3)).test(name);
+    } catch {
+      return false;
+    }
+  }
+  return name.toLowerCase().includes(f.toLowerCase());
+}
