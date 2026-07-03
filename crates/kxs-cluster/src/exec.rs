@@ -69,9 +69,15 @@ pub async fn exec(
             .await;
     }
 
+    // Signalled by the stdout pump when the output sink is dead, so the
+    // control loop can tear the session down deterministically instead of
+    // parking until the next stdout write or an explicit stop.
+    let sink_closed = std::sync::Arc::new(tokio::sync::Notify::new());
+
     // stdout pump -> send (base64)
     let send = std::sync::Arc::new(send);
     let send_out = send.clone();
+    let sink_closed_pump = sink_closed.clone();
     tokio::spawn(async move {
         let mut buf = [0u8; 8192];
         loop {
@@ -80,6 +86,7 @@ pub async fn exec(
                 Ok(n) => {
                     let data = BASE64.encode(&buf[..n]);
                     if !send_out(ExecEvent::Output { data }) {
+                        sink_closed_pump.notify_one();
                         break;
                     }
                 }
@@ -89,6 +96,8 @@ pub async fn exec(
     });
 
     // control loop: stdin, resize, stop, and completion (status taken exactly once above)
+    let send_end = send.clone();
+    let sink_closed_ctrl = sink_closed.clone();
     tokio::spawn(async move {
         tokio::pin!(status_fut);
         let mut stdin_open = true;
@@ -99,6 +108,13 @@ pub async fn exec(
                     // Abort the underlying attach task so the connection to
                     // the kubelet actually tears down instead of leaking.
                     proc.abort();
+                    break;
+                }
+                _ = sink_closed_ctrl.notified() => {
+                    // Output sink is dead; abort the attach task rather than
+                    // leaking the websocket until the next stdout write.
+                    proc.abort();
+                    let _ = send_end(ExecEvent::Closed { message: None });
                     break;
                 }
                 msg = stdin_rx.recv(), if stdin_open => {
