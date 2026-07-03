@@ -1,8 +1,8 @@
 <script lang="ts">
-  let { context }: { context: string } = $props();
+  let { context, tabId }: { context: string; tabId: number } = $props();
 </script>
 
 <div class="cluster-tab">
   <h2>{context}</h2>
-  <p class="dim">Cluster views land in Plan 2. This tab holds the session for <span class="mono">{context}</span>.</p>
+  <p class="dim">Connecting UI lands in Task 9 (tab {tabId}).</p>
 </div>

@@ -16,8 +16,6 @@
     };
   });
 
-  const active = $derived(tabs.tabs.find((t) => t.id === tabs.activeId) ?? null);
-
   function onKeydown(e: KeyboardEvent) {
     // shortcuts must not fire while typing; ctrl+tab cycling is always safe
     if (isEditableTarget(e.target) && !(e.ctrlKey && e.key === "Tab")) return;
@@ -30,12 +28,13 @@
 <div class="app">
   <TabBar />
   <main>
-    {#if active}
-      {#key active.id}
-        <ClusterTab context={active.context} />
-      {/key}
-    {:else}
+    {#each tabs.tabs as tab (tab.id)}
+      <div class="pane" hidden={tabs.activeId !== tab.id}>
+        <ClusterTab context={tab.context} tabId={tab.id} />
+      </div>
+    {/each}
+    <div class="pane" hidden={tabs.activeId !== null}>
       <LaunchScreen />
-    {/if}
+    </div>
   </main>
 </div>

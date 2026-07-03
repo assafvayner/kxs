@@ -1,5 +1,14 @@
 <script lang="ts">
   import { tabs } from "../stores/tabs.svelte";
+  import { sessions } from "../stores/sessions.svelte";
+
+  function dotClass(id: number): string {
+    const s = sessions.get(id);
+    if (!s) return "";
+    if (s.status === "error") return "fail";
+    if (s.status === "connecting" || s.watchState === "reconnecting") return "busy";
+    return "ok";
+  }
 </script>
 
 <nav class="tabbar">
@@ -22,7 +31,7 @@
           tabs.activate(tab.id);
         }
       }}>
-      <span class="dot"></span>
+      <span class="dot {dotClass(tab.id)}"></span>
       <span class="name">{tab.context}</span>
       <button
         class="close"

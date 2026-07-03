@@ -40,6 +40,8 @@ tr.clickable:hover td { background: var(--bg-hover); }
 
 .app { display: flex; flex-direction: column; height: 100vh; }
 .app main { flex: 1; overflow: auto; }
+.pane { height: 100%; }
+.pane[hidden] { display: none; }
 .tabbar {
   display: flex; gap: 4px; padding: 6px 8px; background: var(--bg-raised);
   border-bottom: 1px solid var(--border); user-select: none;
@@ -53,6 +55,10 @@ tr.clickable:hover td { background: var(--bg-hover); }
 .tab.active { background: var(--bg-active); color: var(--fg); }
 .tab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-dim); }
 .tab.active .dot { background: var(--green); }
+/* .dot.ok/.fail/.busy (below) tie on specificity with .tab .dot; these
+   higher-specificity overrides keep TabBar dots at 7px instead of the
+   bare .dot's 9px, while still inheriting color/animation from below. */
+.tab .dot.ok, .tab .dot.fail, .tab .dot.busy { width: 7px; height: 7px; }
 .tab .close {
   background: none; border: none; padding: 0 2px; color: var(--fg-dim);
   font-size: 14px; line-height: 1;
