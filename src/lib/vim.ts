@@ -184,7 +184,33 @@ function moveUp(text: string, caret: number): number {
 // --- stubs filled in later tasks -------------------------------------------
 
 function editKeys(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
-  return done(text, caret, st); // swallow unmapped normal-mode keys (no-op)
+  const le = lineEndOf(text, caret);
+  switch (e.key) {
+    case "x": {
+      if (caret >= le) return done(text, caret, st);
+      const st2 = snapshot(st, text, caret);
+      return done(text.slice(0, caret) + text.slice(caret + 1), caret, {
+        ...st2,
+        register: text[caret],
+        regLinewise: false,
+      });
+    }
+    case "p": {
+      if (!st.register) return done(text, caret, st);
+      const st2 = snapshot(st, text, caret);
+      if (st.regLinewise) {
+        const at = lineEndOf(text, caret);
+        return done(text.slice(0, at) + "\n" + st.register + text.slice(at), at + 1, st2);
+      }
+      return done(
+        text.slice(0, caret) + st.register + text.slice(caret),
+        caret + st.register.length,
+        st2,
+      );
+    }
+    default:
+      return done(text, caret, st); // swallow unmapped keys
+  }
 }
 function handleOperator(_e: KeyInput, text: string, caret: number, st: VimState): VimResult {
   return done(text, caret, { ...st, op: null });

@@ -90,3 +90,25 @@ describe("vim passthrough", () => {
     expect(r.handled).toBe(false);
   });
 });
+
+describe("vim x and p", () => {
+  it("x deletes the char at the caret", () => {
+    const r = run("abc", 1, ["x"]);
+    expect(r.text).toBe("ac");
+    expect(r.caret).toBe(1);
+  });
+  it("x at end of line is a no-op", () => {
+    const r = run("abc", 3, ["x"]);
+    expect(r.text).toBe("abc");
+  });
+  it("x then p pastes the deleted char at the caret", () => {
+    const r = run("abc", 0, ["x", "l", "p"]);
+    // 'a' deleted -> "bc" caret 0; 'l' -> caret 1; p inserts 'a' at caret 1 -> "bac"
+    expect(r.text).toBe("bac");
+    expect(r.caret).toBe(2);
+  });
+  it("p with an empty register is a no-op", () => {
+    const r = run("abc", 0, ["p"]);
+    expect(r.text).toBe("abc");
+  });
+});
