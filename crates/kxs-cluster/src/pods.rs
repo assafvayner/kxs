@@ -187,13 +187,25 @@ pub async fn run_pod_watch(
     client: Client,
     namespace: Option<String>,
     send: impl Fn(PodEvent) -> bool + Send + 'static,
-    mut stop: tokio::sync::oneshot::Receiver<()>,
+    stop: tokio::sync::oneshot::Receiver<()>,
 ) {
     let api: Api<Pod> = match namespace.as_deref() {
         Some(ns) if !ns.is_empty() => Api::namespaced(client, ns),
         _ => Api::all(client),
     };
-    let mut stream = watcher(api, watcher::Config::default()).boxed();
+    let stream = watcher(api, watcher::Config::default()).boxed();
+    drive_pod_events(stream, send, stop).await;
+}
+
+/// Consumes a stream of watcher events into batched PodEvents. Separated from
+/// the kube wiring so the reconnect logic is unit-testable with a synthetic stream.
+pub async fn drive_pod_events<S>(
+    mut stream: S,
+    send: impl Fn(PodEvent) -> bool + Send + 'static,
+    mut stop: tokio::sync::oneshot::Receiver<()>,
+) where
+    S: futures::Stream<Item = Result<watcher::Event<Pod>, watcher::Error>> + Unpin,
+{
     let mut batcher = Batcher::default();
     let mut init_buffer: Option<Vec<PodRow>> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(250));
@@ -207,7 +219,10 @@ pub async fn run_pod_watch(
                 }
             }
             item = stream.next() => match item {
-                Some(Ok(watcher::Event::Init)) => init_buffer = Some(Vec::new()),
+                Some(Ok(watcher::Event::Init)) => {
+                    init_buffer = Some(Vec::new());
+                    batcher = Batcher::default(); // drop stale pre-reconnect deltas; the snapshot is authoritative
+                }
                 Some(Ok(watcher::Event::InitApply(p))) => {
                     if let Some(buf) = &mut init_buffer { buf.push(pod_row(&p)); }
                 }
@@ -404,6 +419,69 @@ mod tests {
         let events = b.flush();
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], PodEvent::Upsert { .. }));
+    }
+
+    #[tokio::test]
+    async fn reconnect_snapshot_discards_stale_batched_events() {
+        use futures::stream;
+        fn p(ns: &str, name: &str) -> Pod {
+            serde_json::from_value(serde_json::json!({
+                "metadata": {"name": name, "namespace": ns},
+                "spec": {"containers": [{"name": "c"}]},
+                "status": {"phase": "Running", "containerStatuses": [
+                    {"name": "c", "ready": true, "restartCount": 0, "state": {"running": {}}}
+                ]}
+            }))
+            .unwrap()
+        }
+        // gen 1: foo live. then an Apply for stale/foo arrives (queued in batcher),
+        // then reconnect: Init/InitApply(bar)/InitDone — snapshot has only bar, not foo.
+        let events: Vec<Result<watcher::Event<Pod>, watcher::Error>> = vec![
+            Ok(watcher::Event::Init),
+            Ok(watcher::Event::InitApply(p("d", "foo"))),
+            Ok(watcher::Event::InitDone),
+            Ok(watcher::Event::Apply(p("d", "stale"))), // queued in batcher, not yet flushed
+            Ok(watcher::Event::Init),                   // reconnect starts
+            Ok(watcher::Event::InitApply(p("d", "bar"))),
+            Ok(watcher::Event::InitDone),
+        ];
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        // Chain a pending tail so the stream never ends: the loop stays alive long
+        // enough for a flush tick to fire, which is exactly when a stale batched
+        // upsert would leak past the reconnect snapshot if the batcher wasn't cleared.
+        let src = stream::iter(events).chain(stream::pending());
+        let handle = tokio::spawn(drive_pod_events(
+            src,
+            move |ev| tx.send(ev).is_ok(),
+            stop_rx,
+        ));
+        // collect events for a short window (longer than one 250ms tick), then stop
+        let mut got = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(600);
+        while let Ok(Some(ev)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            got.push(ev);
+        }
+        let _ = stop_tx.send(());
+        let _ = handle.await;
+        // the "stale" pod (queued before the reconnect Init) must NOT appear in any Upsert
+        let leaked = got.iter().any(
+            |e| matches!(e, PodEvent::Upsert { rows } if rows.iter().any(|r| r.name == "stale")),
+        );
+        assert!(
+            !leaked,
+            "stale pre-reconnect row leaked past the snapshot: {got:?}"
+        );
+        // sanity: last snapshot contains bar
+        let last_snap = got
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                PodEvent::Snapshot { rows } => Some(rows.clone()),
+                _ => None,
+            })
+            .expect("a snapshot");
+        assert!(last_snap.iter().any(|r| r.name == "bar"));
     }
 
     /// Run manually: cargo test -p kxs-cluster -- --ignored (needs kind-local in ~/.kube/config)
