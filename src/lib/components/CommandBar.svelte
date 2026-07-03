@@ -3,11 +3,13 @@
   import { fuzzyKinds, resolveKind } from "../command";
   import type { ResourceKind } from "../api";
 
-  let { session, mode, onclose, onpick }: {
+  let { session, mode, onclose, onpick, appCommands }: {
     session: TabSession;
     mode: "command" | "filter";
     onclose: () => void;
     onpick: (k: ResourceKind) => void;
+    /** Exact-match app-level commands (e.g. "pf", "top") checked before resource-kind resolution. */
+    appCommands?: Record<string, () => void>;
   } = $props();
 
   // svelte-ignore state_referenced_locally
@@ -23,6 +25,12 @@
     e.preventDefault();
     if (mode === "filter") {
       session.filter = text;
+      onclose();
+      return;
+    }
+    const cmd = appCommands?.[text.trim().toLowerCase()];
+    if (cmd) {
+      cmd();
       onclose();
       return;
     }

@@ -11,7 +11,9 @@ export type View =
     }
   | { kind: "describe"; title: string; namespace: string | null; name: string; body: string }
   | { kind: "logs"; namespace: string; pod: string }
-  | { kind: "exec"; namespace: string; pod: string; container: string | null };
+  | { kind: "exec"; namespace: string; pod: string; container: string | null }
+  | { kind: "forwards" }
+  | { kind: "metrics" };
 
 export class ViewStack {
   stack = $state<View[]>([{ kind: "pods" }]);

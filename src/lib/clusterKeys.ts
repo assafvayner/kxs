@@ -10,6 +10,8 @@ export interface ClusterActions {
   scale(): void;
   restart(): void;
   cordon(): void;
+  shell(): void;
+  forward(): void;
   hasSelection(): boolean;
 }
 
@@ -70,6 +72,16 @@ export function handleClusterKey(e: ClusterKeyInput, a: ClusterActions): boolean
     case "c":
       if (!a.hasSelection()) return false;
       a.cordon();
+      e.preventDefault();
+      return true;
+    case "x":
+      if (!a.hasSelection()) return false;
+      a.shell();
+      e.preventDefault();
+      return true;
+    case "f":
+      if (!a.hasSelection()) return false;
+      a.forward();
       e.preventDefault();
       return true;
     default:

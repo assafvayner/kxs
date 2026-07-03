@@ -14,6 +14,9 @@
   import YamlView from "./YamlView.svelte";
   import DescribeView from "./DescribeView.svelte";
   import LogsView from "./LogsView.svelte";
+  import TerminalView from "./TerminalView.svelte";
+  import ForwardsView from "./ForwardsView.svelte";
+  import MetricsView from "./MetricsView.svelte";
 
   let { context, tabId }: { context: string; tabId: number } = $props();
 
@@ -130,6 +133,10 @@
         return `logs: ${v.pod}`;
       case "exec":
         return `exec: ${v.pod}`;
+      case "forwards":
+        return "port-forwards";
+      case "metrics":
+        return "metrics";
     }
   }
 
@@ -229,6 +236,33 @@
         message: `Cordon ${sel.name}?`,
         kind: "confirm",
         run: () => api.cordonNode(tabId, sel.name, true),
+      };
+    },
+    shell: () => {
+      const k = currentKind();
+      if (k.kind !== "Pod" || k.group !== "") {
+        actionError = `shell not supported for ${k.kind}`;
+        return;
+      }
+      const sel = parseSelected();
+      if (!sel || sel.namespace === null) return;
+      pushView({ kind: "exec", namespace: sel.namespace, pod: sel.name, container: null });
+    },
+    forward: () => {
+      const k = currentKind();
+      if (k.kind !== "Pod" || k.group !== "") {
+        actionError = `port-forward not supported for ${k.kind}`;
+        return;
+      }
+      const sel = parseSelected();
+      if (!sel || sel.namespace === null) return;
+      confirm = {
+        message: "Forward pod port",
+        kind: "number",
+        run: async (port) => {
+          await api.startForward(tabId, sel.namespace!, sel.name, port ?? 8080);
+          pushView({ kind: "forwards" });
+        },
       };
     },
     hasSelection: () => s.selected !== null,
@@ -364,6 +398,16 @@
         body={s.views.top.body} />
     {:else if s.views.top.kind === "logs"}
       <LogsView {tabId} namespace={s.views.top.namespace} pod={s.views.top.pod} />
+    {:else if s.views.top.kind === "exec"}
+      <TerminalView
+        {tabId}
+        namespace={s.views.top.namespace}
+        pod={s.views.top.pod}
+        container={s.views.top.container} />
+    {:else if s.views.top.kind === "forwards"}
+      <ForwardsView {tabId} />
+    {:else if s.views.top.kind === "metrics"}
+      <MetricsView {tabId} session={s} />
     {/if}
 
     {#if actionError}
@@ -378,7 +422,13 @@
         session={s}
         mode={bar}
         onclose={() => (bar = null)}
-        onpick={(k) => pushView({ kind: "resource", resourceKind: k })} />
+        onpick={(k) => pushView({ kind: "resource", resourceKind: k })}
+        appCommands={{
+          pf: () => pushView({ kind: "forwards" }),
+          forwards: () => pushView({ kind: "forwards" }),
+          top: () => pushView({ kind: "metrics" }),
+          metrics: () => pushView({ kind: "metrics" }),
+        }} />
     {/if}
 
     {#if confirm !== null}

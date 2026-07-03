@@ -14,6 +14,8 @@ function actions(overrides: Partial<ClusterActions> = {}): ClusterActions {
     scale: vi.fn(),
     restart: vi.fn(),
     cordon: vi.fn(),
+    shell: vi.fn(),
+    forward: vi.fn(),
     hasSelection: () => true,
     ...overrides,
   };
@@ -46,7 +48,7 @@ describe("handleClusterKey", () => {
   it("modifiers or unhandled keys return false (let tab shortcuts run)", () => {
     const a = actions();
     expect(handleClusterKey(ev("t", { metaKey: true }), a)).toBe(false);
-    expect(handleClusterKey(ev("x"), a)).toBe(false);
+    expect(handleClusterKey(ev("q"), a)).toBe(false);
   });
   it("ctrl+d deletes with selection", () => {
     const a = actions();
@@ -64,5 +66,17 @@ describe("handleClusterKey", () => {
     const a = actions({ hasSelection: () => false });
     expect(handleClusterKey(ev("s"), a)).toBe(false);
     expect(handleClusterKey(ev("d", { ctrlKey: true }), a)).toBe(false);
+  });
+  it("x opens shell, f opens port-forward", () => {
+    const a = actions();
+    handleClusterKey(ev("x"), a); expect(a.shell).toHaveBeenCalled();
+    handleClusterKey(ev("f"), a); expect(a.forward).toHaveBeenCalled();
+  });
+  it("x/f ignored with no selection", () => {
+    const a = actions({ hasSelection: () => false });
+    expect(handleClusterKey(ev("x"), a)).toBe(false);
+    expect(handleClusterKey(ev("f"), a)).toBe(false);
+    expect(a.shell).not.toHaveBeenCalled();
+    expect(a.forward).not.toHaveBeenCalled();
   });
 });
