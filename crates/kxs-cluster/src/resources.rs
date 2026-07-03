@@ -85,7 +85,7 @@ pub fn map_table(raw: RawTable) -> ResourceTable {
         .column_definitions
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.priority == 0)
+        .filter(|(_, c)| c.priority == 0 && !c.name.eq_ignore_ascii_case("age"))
         .map(|(i, _)| i)
         .collect();
     let mut columns: Vec<String> = visible
@@ -287,6 +287,25 @@ mod tests {
         let t = map_table(raw);
         assert_eq!(t.rows[0].key, "node-1");
         assert_eq!(t.rows[0].namespace, None);
+    }
+
+    #[test]
+    fn server_age_column_replaced_by_synthetic() {
+        let raw: RawTable = serde_json::from_str(
+            r#"{"columnDefinitions":[{"name":"Name","priority":0},{"name":"Age","priority":0}],
+                "rows":[{"cells":["web-1","5d"],"object":{"metadata":{"name":"web-1","namespace":"app","creationTimestamp":"2026-06-28T00:00:00Z"}}}]}"#,
+        ).unwrap();
+        let t = map_table(raw);
+        assert_eq!(
+            t.columns
+                .iter()
+                .filter(|c| c.eq_ignore_ascii_case("age"))
+                .count(),
+            1,
+            "exactly one Age column"
+        );
+        assert_eq!(t.columns.last().unwrap(), "Age");
+        assert_eq!(t.rows[0].cells, vec!["web-1"], "server age cell dropped");
     }
 
     /// Run manually: cargo test -p kxs-cluster -- --ignored (needs kind-local in ~/.kube/config)
