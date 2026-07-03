@@ -179,4 +179,69 @@ export const api = {
     }),
   getResourceEvents: (tabId: number, namespace: string | null, name: string) =>
     invoke<ResourceEvent[]>("get_resource_events", { tabId, namespace, name }),
+  applyYaml: (
+    tabId: number,
+    k: ResourceKind,
+    namespace: string | null,
+    name: string,
+    yaml: string,
+    dryRun: boolean,
+  ) =>
+    invoke<void>("apply_resource_yaml", {
+      tabId,
+      group: k.group,
+      version: k.version,
+      kind: k.kind,
+      plural: k.plural,
+      namespace,
+      name,
+      yaml,
+      dryRun,
+    }),
+  deleteResource: (tabId: number, k: ResourceKind, namespace: string | null, name: string) =>
+    invoke<void>("delete_resource", {
+      tabId,
+      group: k.group,
+      version: k.version,
+      kind: k.kind,
+      plural: k.plural,
+      namespace,
+      name,
+    }),
+  scaleResource: (
+    tabId: number,
+    k: ResourceKind,
+    namespace: string | null,
+    name: string,
+    replicas: number,
+  ) =>
+    invoke<void>("scale_resource", {
+      tabId,
+      group: k.group,
+      version: k.version,
+      kind: k.kind,
+      plural: k.plural,
+      namespace,
+      name,
+      replicas,
+    }),
+  restartResource: (
+    tabId: number,
+    k: ResourceKind,
+    namespace: string | null,
+    name: string,
+    restartedAt: string,
+  ) =>
+    invoke<void>("restart_resource", {
+      tabId,
+      group: k.group,
+      version: k.version,
+      kind: k.kind,
+      plural: k.plural,
+      namespace,
+      name,
+      restartedAt,
+    }),
+  cordonNode: (tabId: number, name: string, unschedulable: boolean) =>
+    invoke<void>("cordon_node", { tabId, name, unschedulable }),
 };

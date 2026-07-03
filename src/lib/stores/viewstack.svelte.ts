@@ -3,7 +3,12 @@ import type { ResourceKind } from "../api";
 export type View =
   | { kind: "pods" }
   | { kind: "resource"; resourceKind: ResourceKind }
-  | { kind: "yaml"; title: string; body: string }
+  | {
+      kind: "yaml";
+      title: string;
+      body: string;
+      editable?: { resourceKind: ResourceKind; namespace: string | null; name: string };
+    }
   | { kind: "describe"; title: string; namespace: string | null; name: string; body: string }
   | { kind: "logs"; namespace: string; pod: string };
 
