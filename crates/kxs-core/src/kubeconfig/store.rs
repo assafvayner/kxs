@@ -164,6 +164,7 @@ impl KubeconfigStore {
             .first()
             .map(|f| f.path.clone())
             .or_else(crate::kubeconfig::paths::default_kubeconfig_path)
+            // unreachable in practice: the app always resolves at least one path (env or home)
             .expect("no kubeconfig path available")
     }
 
@@ -214,6 +215,12 @@ impl KubeconfigStore {
             .unwrap_or_else(|| self.default_target());
         let name = name.to_string();
         self.mutate(&target, move |cfg| {
+            if cfg.clusters.iter().any(|c| c.name == name) {
+                return Err(crate::error::Error::AlreadyExists {
+                    kind: "cluster",
+                    name: name.clone(),
+                });
+            }
             cfg.clusters.push(NamedCluster {
                 name,
                 cluster,
@@ -254,6 +261,12 @@ impl KubeconfigStore {
             .unwrap_or_else(|| self.default_target());
         let name = name.to_string();
         self.mutate(&target, move |cfg| {
+            if cfg.users.iter().any(|u| u.name == name) {
+                return Err(crate::error::Error::AlreadyExists {
+                    kind: "user",
+                    name: name.clone(),
+                });
+            }
             cfg.users.push(NamedAuthInfo {
                 name,
                 user,
@@ -294,6 +307,12 @@ impl KubeconfigStore {
             .unwrap_or_else(|| self.default_target());
         let (name, cluster, user) = (name.to_string(), cluster.to_string(), user.to_string());
         self.mutate(&target, move |cfg| {
+            if cfg.contexts.iter().any(|c| c.name == name) {
+                return Err(crate::error::Error::AlreadyExists {
+                    kind: "context",
+                    name: name.clone(),
+                });
+            }
             cfg.contexts.push(NamedContext {
                 name,
                 context: Context {
@@ -352,6 +371,7 @@ impl KubeconfigStore {
         })
     }
 
+    /// Other loaded files' current-context fields are left alone: first-file-wins already ignores them.
     pub fn rename_context(&mut self, old: &str, new: &str) -> Result<()> {
         if self.find_context(new).is_some() {
             return Err(crate::error::Error::AlreadyExists {
@@ -368,6 +388,12 @@ impl KubeconfigStore {
             })?;
         let (old, new) = (old.to_string(), new.to_string());
         self.mutate(&path, move |cfg| {
+            if cfg.contexts.iter().any(|c| c.name == new) {
+                return Err(crate::error::Error::AlreadyExists {
+                    kind: "context",
+                    name: new.clone(),
+                });
+            }
             let entry = cfg
                 .contexts
                 .iter_mut()
@@ -651,6 +677,38 @@ contexts: [{name: x, context: {cluster: c1, user: u, namespace: one}}, {name: x,
             "cluster/user entries must remain: {text}"
         );
         assert!(store.find_context("prod").is_some());
+    }
+
+    #[test]
+    fn create_context_rechecks_duplicates_against_fresh_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, a, _) = store_ab(&dir);
+        // external writer adds "staging" directly to disk; store memory is stale
+        let mut on_disk = crate::kubeconfig::io::read_file(&a).unwrap();
+        on_disk.config.contexts.push(NamedContext {
+            name: "staging".into(),
+            context: Context {
+                cluster: "prod".into(),
+                user: "u1".into(),
+                namespace: None,
+                extras: Extras::new(),
+            },
+            extras: Extras::new(),
+        });
+        crate::kubeconfig::io::write_file(&on_disk).unwrap();
+
+        let err = store
+            .create_context("staging", "prod", "u1", None, Some(&a))
+            .unwrap_err();
+        assert!(matches!(err, crate::error::Error::AlreadyExists { .. }));
+        let fresh = crate::kubeconfig::io::read_file(&a).unwrap();
+        let count = fresh
+            .config
+            .contexts
+            .iter()
+            .filter(|c| c.name == "staging")
+            .count();
+        assert_eq!(count, 1, "duplicate context written");
     }
 
     #[test]
