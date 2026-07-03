@@ -90,3 +90,4 @@ tr.clickable:hover td { background: var(--bg-hover); }
 @keyframes pulse { from { opacity: 0.4; } to { opacity: 1; } }
 .ping-btn { background: none; border: none; padding: 0; color: var(--fg-dim); font-size: 13px; }
 .ping-btn:hover { color: var(--accent); background: none; border: none; }
+.vlist { overflow-y: auto; height: 100%; }
