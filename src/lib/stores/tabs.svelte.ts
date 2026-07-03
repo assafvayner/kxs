@@ -5,8 +5,8 @@ export interface Tab {
 
 export class TabsStore {
   tabs = $state<Tab[]>([]);
-  /** null = home / launch screen */
-  activeId = $state<number | null>(null);
+  /** null = home / launch screen; "settings" = settings pane */
+  activeId = $state<number | "settings" | null>(null);
   #nextId = 1;
 
   open(context: string): void {
@@ -30,6 +30,10 @@ export class TabsStore {
     this.activeId = id;
   }
 
+  openSettings(): void {
+    this.activeId = "settings";
+  }
+
   activateIndex(i: number): void {
     if (this.tabs[i]) this.activeId = this.tabs[i].id;
   }
@@ -38,7 +42,9 @@ export class TabsStore {
   cycle(dir: 1 | -1): void {
     if (!this.tabs.length) return;
     const ring: (number | null)[] = [null, ...this.tabs.map((t) => t.id)];
-    const cur = ring.indexOf(this.activeId);
+    // "settings" is not in the ring; treat it as home so cycling re-enters the ring.
+    const found = ring.indexOf(this.activeId as number | null);
+    const cur = found === -1 ? 0 : found;
     this.activeId = ring[(cur + dir + ring.length) % ring.length];
   }
 }

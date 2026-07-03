@@ -21,7 +21,7 @@ export function handleKeydown(e: KeyInput, tabs: TabsStore): void {
     tabs.activate(null);
     e.preventDefault();
   } else if (e.key === "w") {
-    if (tabs.activeId !== null) {
+    if (typeof tabs.activeId === "number") {
       tabs.close(tabs.activeId);
       e.preventDefault();
     }

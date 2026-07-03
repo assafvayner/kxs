@@ -63,3 +63,28 @@ describe("TabsStore", () => {
     expect(t.activeId).toBe(t.tabs[0].id);
   });
 });
+
+describe("settings tab", () => {
+  it("openSettings sets activeId to the settings sentinel", () => {
+    const t = new TabsStore();
+    t.openSettings();
+    expect(t.activeId).toBe("settings");
+  });
+
+  it("cycle from settings falls back into the ring", () => {
+    const t = new TabsStore();
+    t.open("a");
+    t.openSettings();
+    t.cycle(1);
+    expect(t.activeId).toBe(t.tabs[0].id);
+  });
+
+  it("close ignores the settings sentinel gracefully", () => {
+    const t = new TabsStore();
+    t.open("a");
+    t.openSettings();
+    t.close(t.tabs[0].id);
+    expect(t.tabs).toEqual([]);
+    expect(t.activeId).toBe("settings");
+  });
+});
