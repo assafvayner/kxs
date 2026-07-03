@@ -7,9 +7,11 @@
   import { now } from "../stores/now.svelte";
   import { age } from "../age";
   import { handleClusterKey, clusterKeyHandlers, type ClusterActions } from "../clusterKeys";
+  import { currentKindLabel } from "../command";
   import VirtualList from "./VirtualList.svelte";
   import CommandBar from "./CommandBar.svelte";
   import ConfirmBar from "./ConfirmBar.svelte";
+  import ResourcePicker from "./ResourcePicker.svelte";
   import ResourceTableView from "./ResourceTableView.svelte";
   import YamlView from "./YamlView.svelte";
   import DescribeView from "./DescribeView.svelte";
@@ -333,6 +335,10 @@
           {/each}
         </select>
       </label>
+      <ResourcePicker
+        session={s}
+        label={currentKindLabel(s.views.stack)}
+        onpick={(k) => pushView({ kind: "resource", resourceKind: k })} />
       <nav class="breadcrumb">
         {#each s.views.stack as v, i (i)}
           {#if i > 0}<span class="sep">/</span>{/if}

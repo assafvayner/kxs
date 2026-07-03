@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { resolveKind, matchRow, fuzzyKinds } from "./command";
+import { currentKindLabel } from "./command";
 import type { ResourceKind } from "./api";
+import type { View } from "./stores/viewstack.svelte";
 
 const kinds: ResourceKind[] = [
   { group: "", version: "v1", kind: "Pod", plural: "pods", namespaced: true, aliases: ["po", "pod", "pods"] },
@@ -44,5 +46,35 @@ describe("matchRow", () => {
   });
   it("empty filter matches everything", () => {
     expect(matchRow("anything", "")).toBe(true);
+  });
+});
+
+describe("currentKindLabel", () => {
+  const dep: ResourceKind = {
+    group: "apps", version: "v1", kind: "Deployment", plural: "deployments",
+    namespaced: true, aliases: ["deploy"],
+  };
+
+  it("returns Pods for the base pods stack", () => {
+    expect(currentKindLabel([{ kind: "pods" }])).toBe("Pods");
+  });
+
+  it("returns the resource kind when a resource view is on top", () => {
+    expect(currentKindLabel([{ kind: "pods" }, { kind: "resource", resourceKind: dep }])).toBe(
+      "Deployment",
+    );
+  });
+
+  it("returns the underlying resource kind when a detail view is on top", () => {
+    const views: View[] = [
+      { kind: "pods" },
+      { kind: "resource", resourceKind: dep },
+      { kind: "describe", title: "Deployment web", namespace: "default", name: "web", body: "" },
+    ];
+    expect(currentKindLabel(views)).toBe("Deployment");
+  });
+
+  it("falls back to Pods when no pods/resource view is in the stack", () => {
+    expect(currentKindLabel([{ kind: "metrics" }])).toBe("Pods");
   });
 });
