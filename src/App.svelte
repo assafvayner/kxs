@@ -4,6 +4,7 @@
   import TabBar from "./lib/components/TabBar.svelte";
   import LaunchScreen from "./lib/components/LaunchScreen.svelte";
   import ClusterTab from "./lib/components/ClusterTab.svelte";
+  import SettingsView from "./lib/components/SettingsView.svelte";
   import { tabs } from "./lib/stores/tabs.svelte";
   import { contexts } from "./lib/stores/contexts.svelte";
   import { handleKeydown, isEditableTarget } from "./lib/keys";
@@ -21,7 +22,7 @@
     // shortcuts must not fire while typing; ctrl+tab cycling is always safe
     if (isEditableTarget(e.target) && !(e.ctrlKey && e.key === "Tab")) return;
     // active cluster tab gets first crack at cluster keys via a per-tab handler
-    if (tabs.activeId !== null && clusterKeyHandlers.get(tabs.activeId)?.(e)) return;
+    if (typeof tabs.activeId === "number" && clusterKeyHandlers.get(tabs.activeId)?.(e)) return;
     handleKeydown(e, tabs);
   }
 </script>
@@ -38,6 +39,9 @@
     {/each}
     <div class="pane" hidden={tabs.activeId !== null}>
       <LaunchScreen />
+    </div>
+    <div class="pane" hidden={tabs.activeId !== "settings"}>
+      <SettingsView />
     </div>
   </main>
 </div>

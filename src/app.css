@@ -153,3 +153,6 @@ table.events td, table.events th { font-size: 12px; }
 .confirmbar input { flex: 0 0 100px; }
 .terminal-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .term-host { flex: 1; min-height: 0; padding: 4px 8px; background: #16161e; overflow: hidden; }
+.tab.settings { margin-left: auto; font-size: 14px; padding: 4px 8px; }
+.settings-body { padding: 16px; }
+.setting-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }

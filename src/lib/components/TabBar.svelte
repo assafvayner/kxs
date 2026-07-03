@@ -43,4 +43,10 @@
         }}>×</button>
     </div>
   {/each}
+  <button
+    class="tab settings"
+    class:active={tabs.activeId === "settings"}
+    onclick={() => tabs.openSettings()}
+    aria-label="Settings"
+    title="Settings">⚙</button>
 </nav>
