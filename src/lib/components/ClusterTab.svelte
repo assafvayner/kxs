@@ -421,7 +421,6 @@
     {#if bar !== null}
       <CommandBar
         session={s}
-        mode={bar}
         onclose={() => (bar = null)}
         onpick={(k) => pushView({ kind: "resource", resourceKind: k })}
         appCommands={{
