@@ -120,7 +120,7 @@ pub fn map_table(raw: RawTable) -> ResourceTable {
     ResourceTable { columns, rows }
 }
 
-fn api_resource(group: &str, version: &str, kind: &str, plural: &str) -> ApiResource {
+pub(crate) fn api_resource(group: &str, version: &str, kind: &str, plural: &str) -> ApiResource {
     let mut ar = ApiResource::from_gvk(&GroupVersionKind {
         group: group.to_string(),
         version: version.to_string(),
