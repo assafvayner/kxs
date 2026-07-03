@@ -1,0 +1,18 @@
+[package]
+name = "kxs-cluster"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kxs-core = { path = "../kxs-core" }
+kube = { version = "1", default-features = false, features = ["client", "config", "runtime", "rustls-tls"] }
+k8s-openapi = { version = "0.25", features = ["latest"] }
+tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
