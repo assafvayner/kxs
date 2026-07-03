@@ -1,5 +1,11 @@
+use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
+use kube::api::Api;
+use kube::runtime::watcher;
+use kube::Client;
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -118,6 +124,106 @@ pub fn pod_row(pod: &Pod) -> PodRow {
         ip: status.and_then(|s| s.pod_ip.clone()),
         node: pod.spec.as_ref().and_then(|s| s.node_name.clone()),
         created: meta.creation_timestamp.as_ref().map(|t| t.0.to_rfc3339()),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PodEvent {
+    Snapshot {
+        rows: Vec<PodRow>,
+    },
+    Upsert {
+        rows: Vec<PodRow>,
+    },
+    Delete {
+        keys: Vec<String>,
+    },
+    Status {
+        state: String,
+        message: Option<String>,
+    },
+}
+
+/// Coalesces watcher churn between flush ticks so the frontend gets bounded,
+/// deduplicated batches instead of per-event traffic.
+#[derive(Default)]
+pub struct Batcher {
+    upserts: BTreeMap<String, PodRow>,
+    deletes: BTreeSet<String>,
+}
+
+impl Batcher {
+    pub fn upsert(&mut self, row: PodRow) {
+        self.deletes.remove(&row.key);
+        self.upserts.insert(row.key.clone(), row);
+    }
+
+    pub fn delete(&mut self, key: String) {
+        self.upserts.remove(&key);
+        self.deletes.insert(key);
+    }
+
+    pub fn flush(&mut self) -> Vec<PodEvent> {
+        let mut out = Vec::new();
+        if !self.upserts.is_empty() {
+            out.push(PodEvent::Upsert {
+                rows: std::mem::take(&mut self.upserts).into_values().collect(),
+            });
+        }
+        if !self.deletes.is_empty() {
+            out.push(PodEvent::Delete {
+                keys: std::mem::take(&mut self.deletes).into_iter().collect(),
+            });
+        }
+        out
+    }
+}
+
+/// Watches pods and pushes batched events through `send` until `send` returns
+/// false (receiver gone) or `stop` fires. watcher() relists internally on
+/// errors; error events surface as Status("reconnecting").
+pub async fn run_pod_watch(
+    client: Client,
+    namespace: Option<String>,
+    send: impl Fn(PodEvent) -> bool + Send + 'static,
+    mut stop: tokio::sync::oneshot::Receiver<()>,
+) {
+    let api: Api<Pod> = match namespace.as_deref() {
+        Some(ns) if !ns.is_empty() => Api::namespaced(client, ns),
+        _ => Api::all(client),
+    };
+    let mut stream = watcher(api, watcher::Config::default()).boxed();
+    let mut batcher = Batcher::default();
+    let mut init_buffer: Option<Vec<PodRow>> = None;
+    let mut tick = tokio::time::interval(Duration::from_millis(250));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = &mut stop => return,
+            _ = tick.tick() => {
+                for ev in batcher.flush() {
+                    if !send(ev) { return; }
+                }
+            }
+            item = stream.next() => match item {
+                Some(Ok(watcher::Event::Init)) => init_buffer = Some(Vec::new()),
+                Some(Ok(watcher::Event::InitApply(p))) => {
+                    if let Some(buf) = &mut init_buffer { buf.push(pod_row(&p)); }
+                }
+                Some(Ok(watcher::Event::InitDone)) => {
+                    let rows = init_buffer.take().unwrap_or_default();
+                    if !send(PodEvent::Snapshot { rows }) { return; }
+                    if !send(PodEvent::Status { state: "live".into(), message: None }) { return; }
+                }
+                Some(Ok(watcher::Event::Apply(p))) => batcher.upsert(pod_row(&p)),
+                Some(Ok(watcher::Event::Delete(p))) => batcher.delete(pod_key(&p)),
+                Some(Err(e)) => {
+                    if !send(PodEvent::Status { state: "reconnecting".into(), message: Some(e.to_string()) }) { return; }
+                }
+                None => return,
+            }
+        }
     }
 }
 
@@ -241,5 +347,85 @@ mod tests {
         assert_eq!(r.ready, "0/0");
         assert_eq!(r.status, "Unknown");
         assert_eq!(r.restarts, 0);
+    }
+
+    fn row(key: &str) -> PodRow {
+        PodRow {
+            key: key.into(),
+            name: key.rsplit('/').next().unwrap().into(),
+            namespace: key.split('/').next().unwrap().into(),
+            ready: "1/1".into(),
+            status: "Running".into(),
+            restarts: 0,
+            ip: None,
+            node: None,
+            created: None,
+        }
+    }
+
+    #[test]
+    fn batcher_coalesces() {
+        let mut b = Batcher::default();
+        assert!(b.flush().is_empty());
+        b.upsert(row("d/a"));
+        b.upsert(row("d/a"));
+        b.upsert(row("d/b"));
+        b.delete("d/c".into());
+        let events = b.flush();
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            PodEvent::Upsert { rows } => assert_eq!(rows.len(), 2),
+            other => panic!("expected upsert, got {other:?}"),
+        }
+        match &events[1] {
+            PodEvent::Delete { keys } => assert_eq!(keys, &vec!["d/c".to_string()]),
+            other => panic!("expected delete, got {other:?}"),
+        }
+        assert!(b.flush().is_empty(), "flush must clear");
+    }
+
+    #[test]
+    fn upsert_then_delete_is_delete_only() {
+        let mut b = Batcher::default();
+        b.upsert(row("d/a"));
+        b.delete("d/a".into());
+        let events = b.flush();
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(&events[0], PodEvent::Delete { keys } if keys == &vec!["d/a".to_string()])
+        );
+    }
+
+    #[test]
+    fn delete_then_upsert_is_upsert_only() {
+        let mut b = Batcher::default();
+        b.delete("d/a".into());
+        b.upsert(row("d/a"));
+        let events = b.flush();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], PodEvent::Upsert { .. }));
+    }
+
+    /// Run manually: cargo test -p kxs-cluster -- --ignored (needs kind-local in ~/.kube/config)
+    #[tokio::test]
+    #[ignore]
+    async fn watches_kind_local_pods() {
+        let paths = kxs_core::kubeconfig::paths::kubeconfig_paths();
+        let store = kxs_core::kubeconfig::store::KubeconfigStore::load(paths).unwrap();
+        let yaml = crate::bridge::kubeconfig_yaml_for_context(&store, "kind-local").unwrap();
+        let session = crate::session::connect(&yaml, "kind-local").await.unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(run_pod_watch(
+            session.client.clone(),
+            None,
+            move |ev| tx.send(ev).is_ok(),
+            stop_rx,
+        ));
+        let first = tokio::time::timeout(Duration::from_secs(15), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(first, PodEvent::Snapshot { .. }));
     }
 }
