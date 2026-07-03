@@ -8,6 +8,7 @@ function actions(overrides: Partial<ClusterActions> = {}): ClusterActions {
     back: vi.fn(),
     describe: vi.fn(),
     yaml: vi.fn(),
+    edit: vi.fn(),
     logs: vi.fn(),
     enter: vi.fn(),
     del: vi.fn(),
@@ -78,5 +79,16 @@ describe("handleClusterKey", () => {
     expect(handleClusterKey(ev("f"), a)).toBe(false);
     expect(a.shell).not.toHaveBeenCalled();
     expect(a.forward).not.toHaveBeenCalled();
+  });
+  it("e opens the editable yaml view with selection", () => {
+    const a = actions();
+    const e = ev("e");
+    expect(handleClusterKey(e, a)).toBe(true);
+    expect(a.edit).toHaveBeenCalled();
+  });
+  it("e ignored with no selection", () => {
+    const a = actions({ hasSelection: () => false });
+    expect(handleClusterKey(ev("e"), a)).toBe(false);
+    expect(a.edit).not.toHaveBeenCalled();
   });
 });

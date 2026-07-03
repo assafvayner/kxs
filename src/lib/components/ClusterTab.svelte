@@ -15,6 +15,7 @@
   import SearchBar from "./SearchBar.svelte";
   import ResourceTableView from "./ResourceTableView.svelte";
   import YamlView from "./YamlView.svelte";
+  import YamlEditView from "./YamlEditView.svelte";
   import DescribeView from "./DescribeView.svelte";
   import LogsView from "./LogsView.svelte";
   import TerminalView from "./TerminalView.svelte";
@@ -131,6 +132,7 @@
       case "resource":
         return v.resourceKind.kind;
       case "yaml":
+      case "yamlEdit":
       case "describe":
         return v.title;
       case "logs":
@@ -166,6 +168,25 @@
     }
   }
 
+  async function openEdit() {
+    const sel = parseSelected();
+    if (!sel) return;
+    const k = currentKind();
+    try {
+      const body = await api.getResourceYaml(tabId, k, sel.namespace, sel.name);
+      pushView({
+        kind: "yamlEdit",
+        title: `${k.kind} ${sel.name}`,
+        body,
+        resourceKind: k,
+        namespace: sel.namespace,
+        name: sel.name,
+      });
+    } catch {
+      /* selection may be stale; ignore */
+    }
+  }
+
   const actions: ClusterActions = {
     openCommand: () => (bar = "command"),
     focusSearch: () => searchBar?.focus(),
@@ -175,6 +196,7 @@
     },
     describe: () => openDetail("describe"),
     yaml: () => openDetail("yaml"),
+    edit: () => openEdit(),
     logs: () => {
       const k = currentKind();
       if (k.kind !== "Pod" || k.group !== "") return;
@@ -389,6 +411,14 @@
       <ResourceTableView {tabId} session={s} resourceKind={s.views.top.resourceKind} />
     {:else if s.views.top.kind === "yaml"}
       <YamlView title={s.views.top.title} body={s.views.top.body} session={s} />
+    {:else if s.views.top.kind === "yamlEdit"}
+      <YamlEditView
+        {tabId}
+        title={s.views.top.title}
+        body={s.views.top.body}
+        resourceKind={s.views.top.resourceKind}
+        namespace={s.views.top.namespace}
+        name={s.views.top.name} />
     {:else if s.views.top.kind === "describe"}
       <DescribeView
         {tabId}

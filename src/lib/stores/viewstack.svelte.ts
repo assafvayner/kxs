@@ -4,6 +4,7 @@ export type View =
   | { kind: "pods" }
   | { kind: "resource"; resourceKind: ResourceKind }
   | { kind: "yaml"; title: string; body: string }
+  | { kind: "yamlEdit"; title: string; body: string; resourceKind: ResourceKind; namespace: string | null; name: string }
   | { kind: "describe"; title: string; namespace: string | null; name: string; body: string }
   | { kind: "logs"; namespace: string; pod: string }
   | { kind: "exec"; namespace: string; pod: string; container: string | null }

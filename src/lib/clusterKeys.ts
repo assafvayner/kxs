@@ -4,6 +4,7 @@ export interface ClusterActions {
   back(): void;
   describe(): void;
   yaml(): void;
+  edit(): void;
   logs(): void;
   enter(): void;
   del(): void;
@@ -57,6 +58,11 @@ export function handleClusterKey(e: ClusterKeyInput, a: ClusterActions): boolean
       if (e.key === "d") a.describe();
       else if (e.key === "y") a.yaml();
       else a.logs();
+      e.preventDefault();
+      return true;
+    case "e":
+      if (!a.hasSelection()) return false;
+      a.edit();
       e.preventDefault();
       return true;
     case "s":
