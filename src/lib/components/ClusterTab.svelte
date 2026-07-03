@@ -128,6 +128,8 @@
         return v.title;
       case "logs":
         return `logs: ${v.pod}`;
+      case "exec":
+        return `exec: ${v.pod}`;
     }
   }
 

@@ -134,6 +134,23 @@ export interface ResourceEvent {
   lastSeen: string | null;
 }
 
+export type ExecEvent =
+  | { type: "output"; data: string }
+  | { type: "closed"; message: string | null };
+
+export interface ForwardInfo {
+  id: number;
+  localPort: number;
+}
+
+export interface MetricsRow {
+  key: string;
+  name: string;
+  namespace: string | null;
+  cpuMillicores: number;
+  memMib: number;
+}
+
 export const api = {
   listContexts: () => invoke<KubeconfigView>("list_contexts"),
   getContext: (name: string) => invoke<ContextDetail>("get_context", { name }),
@@ -244,4 +261,39 @@ export const api = {
     }),
   cordonNode: (tabId: number, name: string, unschedulable: boolean) =>
     invoke<void>("cordon_node", { tabId, name, unschedulable }),
+  startExec: (
+    tabId: number,
+    namespace: string,
+    pod: string,
+    container: string | null,
+    command: string[],
+    cols: number,
+    rows: number,
+    onEvent: (e: ExecEvent) => void,
+  ) => {
+    const channel = new Channel<ExecEvent>();
+    channel.onmessage = onEvent;
+    return invoke<number>("start_exec", {
+      tabId,
+      namespace,
+      pod,
+      container,
+      command,
+      cols,
+      rows,
+      channel,
+    });
+  },
+  execStdin: (tabId: number, execId: number, dataB64: string) =>
+    invoke<void>("exec_stdin", { tabId, execId, data: dataB64 }),
+  execResize: (tabId: number, execId: number, cols: number, rows: number) =>
+    invoke<void>("exec_resize", { tabId, execId, cols, rows }),
+  stopExec: (tabId: number, execId: number) => invoke<void>("stop_exec", { tabId, execId }),
+  startForward: (tabId: number, namespace: string, pod: string, podPort: number) =>
+    invoke<ForwardInfo>("start_forward", { tabId, namespace, pod, podPort }),
+  stopForward: (tabId: number, forwardId: number) =>
+    invoke<void>("stop_forward", { tabId, forwardId }),
+  listForwards: (tabId: number) => invoke<ForwardInfo[]>("list_forwards", { tabId }),
+  podMetrics: (tabId: number, namespace: string | null) =>
+    invoke<MetricsRow[]>("pod_metrics", { tabId, namespace }),
 };
