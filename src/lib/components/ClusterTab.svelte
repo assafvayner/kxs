@@ -149,12 +149,7 @@
     try {
       const body = await api.getResourceYaml(tabId, k, sel.namespace, sel.name);
       if (kind === "yaml") {
-        pushView({
-          kind: "yaml",
-          title: `${k.kind} ${sel.name}`,
-          body,
-          editable: { resourceKind: k, namespace: sel.namespace, name: sel.name },
-        });
+        pushView({ kind: "yaml", title: `${k.kind} ${sel.name}`, body });
       } else {
         pushView({
           kind: "describe",
@@ -390,11 +385,7 @@
     {:else if s.views.top.kind === "resource"}
       <ResourceTableView {tabId} session={s} resourceKind={s.views.top.resourceKind} />
     {:else if s.views.top.kind === "yaml"}
-      <YamlView
-        {tabId}
-        title={s.views.top.title}
-        body={s.views.top.body}
-        editable={s.views.top.editable} />
+      <YamlView title={s.views.top.title} body={s.views.top.body} session={s} />
     {:else if s.views.top.kind === "describe"}
       <DescribeView
         {tabId}
