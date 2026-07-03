@@ -62,3 +62,16 @@ tr.clickable:hover td { background: var(--bg-hover); }
 .dim { color: var(--fg-dim); }
 .launch { padding: 24px; max-width: 1100px; margin: 0 auto; }
 .launch header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+
+.form section {
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 16px; margin-bottom: 12px;
+}
+.form h3 { margin: 0 0 8px; font-size: 13px; color: var(--accent); }
+.form label { display: block; margin: 8px 0; color: var(--fg-dim); font-size: 13px; }
+.form label input:not([type="radio"]), .form label select, .form label textarea {
+  display: block; width: 100%; margin-top: 4px;
+}
+.form label.radio { display: inline-flex; gap: 6px; margin-right: 16px; align-items: center; }
+.form .reveal { display: flex; gap: 8px; margin-top: 4px; }
+.form .reveal input { flex: 1; margin-top: 0; }
