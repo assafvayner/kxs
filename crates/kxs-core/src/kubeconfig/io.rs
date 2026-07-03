@@ -14,12 +14,14 @@ pub fn read_file(path: &Path) -> Result<KubeconfigFile> {
                 path: path.to_path_buf(),
                 config,
                 exists: true,
+                error: None,
             })
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(KubeconfigFile {
             path: path.to_path_buf(),
             config: Kubeconfig::default(),
             exists: false,
+            error: None,
         }),
         Err(e) => Err(Error::Io {
             path: path.to_path_buf(),

@@ -6,6 +6,7 @@ pub fn default_kubeconfig_path() -> Option<PathBuf> {
 }
 
 /// Pure resolution logic, testable without touching process env.
+/// Paths are used as-is: no deduplication, no ~ expansion, no cwd canonicalization (matches kubectl, which relies on the shell).
 pub fn kubeconfig_paths_from(
     env_val: Option<&OsStr>,
     home_default: Option<PathBuf>,
