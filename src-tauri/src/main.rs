@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod cluster_ipc;
 mod ipc;
 mod watcher;
 
@@ -17,12 +18,17 @@ fn main() {
             store: std::sync::Mutex::new(store),
             warnings: std::sync::Mutex::new(warnings),
         })
+        .manage(cluster_ipc::Sessions::default())
         .invoke_handler(tauri::generate_handler![
             ipc::list_contexts,
             ipc::get_context,
             ipc::save_context,
             ipc::delete_context,
-            ipc::ping_context
+            ipc::ping_context,
+            cluster_ipc::open_session,
+            cluster_ipc::close_session,
+            cluster_ipc::list_namespaces,
+            cluster_ipc::watch_pods
         ])
         .setup(move |app| {
             watcher::spawn(app.handle().clone(), paths);
