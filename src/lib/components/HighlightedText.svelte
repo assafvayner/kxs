@@ -14,4 +14,4 @@
   });
 </script>
 
-<pre class="detail-body mono" bind:this={container}>{#each lines as l}<div class:hl={query ? matchRow(l, query) : false}>{l || " "}</div>{/each}</pre>
+<pre class="hltext mono" bind:this={container}>{#each lines as l}<div class:hl={query ? matchRow(l, query) : false}>{l || " "}</div>{/each}</pre>

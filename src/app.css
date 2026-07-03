@@ -130,6 +130,8 @@ tr.clickable:hover td { background: var(--bg-hover); }
 .detail-body.logs { white-space: pre-wrap; }
 .detail-body.logs.nowrap { white-space: pre; }
 .detail-body .hl { background: #3b331c; }
+.hltext { margin: 0; }
+.hltext .hl { background: #3b331c; }
 .yaml-editor { flex: 1; width: 100%; resize: none; border: none; border-radius: 0; padding: 12px 16px; font-size: 12px; line-height: 1.5; background: var(--bg); color: var(--fg); }
 .yaml-editor:focus { outline: none; }
 .apply-err { color: var(--red); background: #3b1c26; margin: 0; padding: 8px 16px; max-height: 30%; overflow: auto; white-space: pre-wrap; }

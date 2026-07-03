@@ -7,5 +7,5 @@
 
 <div class="detail">
   <div class="detail-bar"><span class="mono">{title}</span></div>
-  <HighlightedText {body} query={session.filter} />
+  <div class="detail-body"><HighlightedText {body} query={session.filter} /></div>
 </div>

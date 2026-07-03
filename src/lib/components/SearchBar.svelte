@@ -42,7 +42,7 @@
     disabled={!enabled}
     placeholder="search (-r for regex)"
     class="mono" />
-  {#if text}
+  {#if enabled && text}
     <button type="button" class="clear" onclick={clear} title="clear">×</button>
   {/if}
 </div>
