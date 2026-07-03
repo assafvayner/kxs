@@ -10,13 +10,20 @@
   let { context, tabId }: { context: string; tabId: number } = $props();
 
   const s = new TabSession();
+  // svelte-ignore state_referenced_locally
   sessions.set(tabId, s);
+
+  let destroyed = false;
 
   async function connect() {
     s.status = "connecting";
     s.error = null;
     try {
       const info = await api.openSession(tabId, context);
+      if (destroyed) {
+        api.closeSession(tabId).catch(() => {});
+        return;
+      }
       s.version = info.version;
       s.namespace = info.defaultNamespace || null;
       s.status = "ready";
@@ -26,6 +33,7 @@
         .catch(() => {});
       await startWatch();
     } catch (e) {
+      if (destroyed) return;
       s.status = "error";
       s.error = String(e);
     }
@@ -54,6 +62,7 @@
 
   onMount(connect);
   onDestroy(() => {
+    destroyed = true;
     api.closeSession(tabId).catch(() => {});
     sessions.delete(tabId);
   });
