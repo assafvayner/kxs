@@ -15,11 +15,18 @@
       role="button"
       tabindex="0"
       onclick={() => tabs.activate(tab.id)}
-      onkeydown={(e) => e.key === "Enter" && tabs.activate(tab.id)}>
+      onkeydown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          tabs.activate(tab.id);
+        }
+      }}>
       <span class="dot"></span>
       <span class="name">{tab.context}</span>
       <button
         class="close"
+        aria-label="Close"
         title="Close (⌘W)"
         onclick={(e) => {
           e.stopPropagation();
