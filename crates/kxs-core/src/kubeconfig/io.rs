@@ -35,7 +35,7 @@ pub const BACKUP_KEEP: usize = 5;
 /// Atomic write with timestamped backup of the previous content.
 /// Backup names zero-pad nanos so lexicographic sort == chronological.
 pub fn write_file(file: &KubeconfigFile) -> Result<()> {
-    let path = &file.path;
+    let path = &resolve_write_target(&file.path)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| Error::Io {
             path: path.clone(),
@@ -64,6 +64,8 @@ pub fn write_file(file: &KubeconfigFile) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        // & 0o777 intentionally drops setuid/setgid/sticky bits; hardlinked
+        // configs split on rename (accepted).
         let mode = std::fs::metadata(path)
             .map(|m| m.permissions().mode() & 0o777)
             .unwrap_or(0o600);
@@ -74,11 +76,28 @@ pub fn write_file(file: &KubeconfigFile) -> Result<()> {
             },
         )?;
     }
+    tmp.as_file().sync_all().map_err(|e| Error::Io {
+        path: path.clone(),
+        source: e,
+    })?;
     tmp.persist(path).map_err(|e| Error::Io {
         path: path.clone(),
         source: e.error,
     })?;
     Ok(())
+}
+
+/// Writes must land in the file a symlink points at, not replace the link —
+/// dotfiles-managed kubeconfigs are commonly symlinked.
+fn resolve_write_target(path: &Path) -> Result<std::path::PathBuf> {
+    if path.exists() {
+        std::fs::canonicalize(path).map_err(|e| Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })
+    } else {
+        Ok(path.to_path_buf())
+    }
 }
 
 fn backup(path: &Path) -> Result<()> {
@@ -90,7 +109,12 @@ fn backup(path: &Path) -> Result<()> {
         .file_name()
         .expect("kubeconfig path has file name")
         .to_string_lossy();
-    let backup_path = path.with_file_name(format!("{file_name}.kxs-backup-{ts:030}"));
+    let mut backup_path = path.with_file_name(format!("{file_name}.kxs-backup-{ts:030}"));
+    let mut bump = 0u32;
+    while backup_path.exists() {
+        bump += 1;
+        backup_path = path.with_file_name(format!("{file_name}.kxs-backup-{ts:030}-{bump}"));
+    }
     std::fs::copy(path, &backup_path).map_err(|e| Error::Io {
         path: path.to_path_buf(),
         source: e,
@@ -168,6 +192,42 @@ mod tests {
         let file = read_file(&path).unwrap();
         write_file(&file).unwrap();
         assert!(path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_through_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real-config");
+        std::fs::write(&real, "apiVersion: v1\nkind: Config\n").unwrap();
+        let link = dir.path().join("config");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut f = read_file(&link).unwrap();
+        f.config.current_context = Some("via-link".into());
+        write_file(&f).unwrap();
+        assert!(
+            link.symlink_metadata().unwrap().file_type().is_symlink(),
+            "symlink replaced"
+        );
+        let real_content = std::fs::read_to_string(&real).unwrap();
+        assert!(
+            real_content.contains("via-link"),
+            "real target not updated: {real_content}"
+        );
+    }
+
+    #[test]
+    fn new_file_creates_no_backups() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        let file = read_file(&path).unwrap();
+        write_file(&file).unwrap();
+        let backups = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("kxs-backup"))
+            .count();
+        assert_eq!(backups, 0);
     }
 
     #[cfg(unix)]
