@@ -8,26 +8,19 @@
   let num = $state(1);
   let input: HTMLInputElement | undefined = $state();
   let cancelBtn: HTMLButtonElement | undefined = $state();
-  $effect(() => {
-    if (kind === "number") input?.focus();
-    else cancelBtn?.focus();
-  });
+  $effect(() => { (kind === "number" ? input : cancelBtn)?.focus(); });
   function onkeydown(e: KeyboardEvent) {
-    // stopPropagation: the confirm/cancel buttons aren't "editable" targets, so
-    // without this the window-level cluster key handler would also see Enter/Escape.
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); oncancel(); }
-    else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onconfirm(kind === "number" ? num : undefined); }
+    e.stopPropagation(); // this bar owns the keyboard while open
+    if (e.key === "Escape") { e.preventDefault(); oncancel(); }
+    else if (e.key === "Enter" && kind === "number") { e.preventDefault(); onconfirm(num); }
+    // confirm kind: Enter activates the focused button natively (Cancel by default)
   }
 </script>
-
 <div class="confirmbar">
   <span>{message}</span>
   {#if kind === "number"}
-    <input bind:this={input} type="number" min="0" bind:value={num} class="mono" {onkeydown} />
+    <input bind:this={input} {onkeydown} type="number" min="0" bind:value={num} class="mono" />
   {/if}
-  <button
-    class="primary"
-    {onkeydown}
-    onclick={() => onconfirm(kind === "number" ? num : undefined)}>Confirm</button>
+  <button class="primary" {onkeydown} onclick={() => onconfirm(kind === "number" ? num : undefined)}>Confirm</button>
   <button bind:this={cancelBtn} {onkeydown} onclick={oncancel}>Cancel</button>
 </div>

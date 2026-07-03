@@ -21,7 +21,9 @@
 
   // svelte-ignore state_referenced_locally -- one-time seed of the editable draft from the initial prop value
   let draft = $state(body);
-  let dirty = $derived(draft !== body);
+  // svelte-ignore state_referenced_locally -- one-time seed of the saved baseline from the initial prop value
+  let saved = $state(body);
+  let dirty = $derived(draft !== saved);
   let status = $state<{ kind: "idle" | "ok" | "err"; msg: string }>({ kind: "idle", msg: "" });
   let busy = $state(false);
 
@@ -42,6 +44,7 @@
     busy = true;
     try {
       await api.applyYaml(tabId, editable.resourceKind, editable.namespace, editable.name, draft, false);
+      saved = draft;
       status = { kind: "ok", msg: "Applied" };
     } catch (e) {
       status = { kind: "err", msg: String(e) };

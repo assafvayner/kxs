@@ -27,6 +27,7 @@
     message: string;
     kind: "confirm" | "number";
     run: (value?: number) => Promise<void>;
+    clearSelectionOnSuccess?: boolean;
   }>(null);
   let actionError = $state<string | null>(null);
 
@@ -182,6 +183,7 @@
         message: `Delete ${k.kind} ${sel.name}?`,
         kind: "confirm",
         run: () => api.deleteResource(tabId, k, sel.namespace, sel.name),
+        clearSelectionOnSuccess: true,
       };
     },
     scale: () => {
@@ -233,9 +235,11 @@
   async function onConfirmAccept(value?: number) {
     if (!confirm) return;
     const run = confirm.run;
+    const clearSelectionOnSuccess = confirm.clearSelectionOnSuccess === true;
     try {
       await run(value);
       actionError = null;
+      if (clearSelectionOnSuccess) s.selected = null;
     } catch (e) {
       actionError = String(e);
     } finally {
@@ -247,7 +251,10 @@
   }
 
   onMount(() => {
-    clusterKeyHandlers.set(tabId, (e) => handleClusterKey(e, actions));
+    clusterKeyHandlers.set(tabId, (e) => {
+      if (bar !== null || confirm !== null) return true; // a bar owns the keyboard; swallow
+      return handleClusterKey(e, actions);
+    });
     connect();
   });
   onDestroy(() => {
