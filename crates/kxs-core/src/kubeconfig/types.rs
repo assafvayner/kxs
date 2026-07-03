@@ -3,6 +3,9 @@ use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 
 /// Unknown fields captured on every struct so write-back never drops data.
+/// Intentional round-trip deviations (kubectl-equivalent, accepted by spec):
+/// keys are re-ordered on write, and explicitly-empty lists (`contexts: []`)
+/// are omitted rather than kept empty.
 pub type Extras = BTreeMap<String, Value>;
 
 fn default_api_version() -> String {
@@ -141,6 +144,8 @@ pub struct ExecConfig {
 pub struct ExecEnv {
     pub name: String,
     pub value: String,
+    #[serde(flatten)]
+    pub extras: Extras,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -191,6 +196,7 @@ users:
         env:
           - name: AWS_PROFILE
             value: prod
+            custom-env-field: keep-me-too
   - name: kind-user
     user:
       token: abc123
@@ -234,6 +240,10 @@ contexts:
         assert!(
             out.contains("my-custom-field"),
             "nested extras lost:\n{out}"
+        );
+        assert!(
+            out.contains("custom-env-field"),
+            "exec env extras lost:\n{out}"
         );
         let reparsed: Kubeconfig = serde_yaml_ng::from_str(&out).unwrap();
         assert_eq!(cfg, reparsed);
