@@ -14,7 +14,7 @@ export interface VimState {
   undoStack: Array<{ text: string; caret: number }>;
 }
 
-export type VimEffect = "apply" | undefined;
+export type VimEffect = "apply";
 
 export interface VimResult {
   text: string;
@@ -128,7 +128,7 @@ function handleNormal(e: KeyInput, text: string, caret: number, st: VimState): V
   if (e.metaKey || e.ctrlKey) return pass(text, caret, st);
   if (e.key.length !== 1 && e.key !== "Escape") return pass(text, caret, st);
 
-  if (st.op) return handleOperator(e, text, caret, st); // filled in Task 6
+  if (st.op) return handleOperator(e, text, caret, st);
 
   // pending "g" (for gg)
   if (st.pending === "g") {
@@ -180,8 +180,10 @@ function handleNormal(e: KeyInput, text: string, caret: number, st: VimState): V
       return done(text, caret, { ...st, op: e.key as "d" | "c" | "y" });
     case ":":
       return done(text, caret, { ...st, mode: "ex", exBuf: "" });
+    case "/":
+      return done(text, caret, { ...st, mode: "search", searchBuf: "" });
     default:
-      return editKeys(e, text, caret, st); // x/dd/yy/p/u etc., filled in Tasks 5/7
+      return editKeys(e, text, caret, st); // edits/undo/search-repeat
   }
 }
 
@@ -200,7 +202,16 @@ function moveUp(text: string, caret: number): number {
   return Math.min(prevStart + colOf(text, caret), prevEnd);
 }
 
-// --- stubs filled in later tasks -------------------------------------------
+// Next occurrence of needle strictly after `from`, wrapping to the top.
+function findNext(text: string, from: number, needle: string): number {
+  if (!needle) return from;
+  const i = text.indexOf(needle, from + 1);
+  if (i !== -1) return i;
+  const wrapped = text.indexOf(needle);
+  return wrapped === -1 ? from : wrapped;
+}
+
+// --- edit/operator/ex/search handlers --------------------------------------
 
 function editKeys(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
   const le = lineEndOf(text, caret);
@@ -232,6 +243,10 @@ function editKeys(e: KeyInput, text: string, caret: number, st: VimState): VimRe
       const undoStack = [...st.undoStack];
       const snap = undoStack.pop()!;
       return done(snap.text, snap.caret, { ...st, undoStack });
+    }
+    case "n": {
+      if (!st.lastSearch) return done(text, caret, st);
+      return done(text, findNext(text, caret, st.lastSearch), st);
     }
     default:
       return done(text, caret, st); // swallow unmapped keys
@@ -371,5 +386,15 @@ function execEx(text: string, caret: number, st: VimState): VimResult {
   });
 }
 function handleSearch(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
-  return done(text, caret, { ...st, mode: "normal", searchBuf: "" });
+  if (e.key === "Escape") return done(text, caret, { ...st, mode: "normal", searchBuf: "" });
+  if (e.key === "Backspace") {
+    return done(text, caret, { ...st, searchBuf: st.searchBuf.slice(0, -1) });
+  }
+  if (e.key === "Enter") {
+    const needle = st.searchBuf;
+    const next = findNext(text, caret, needle);
+    return done(text, next, { ...st, mode: "normal", searchBuf: "", lastSearch: needle });
+  }
+  if (e.key.length === 1) return done(text, caret, { ...st, searchBuf: st.searchBuf + e.key });
+  return pass(text, caret, st);
 }

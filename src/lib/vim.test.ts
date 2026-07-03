@@ -219,3 +219,25 @@ describe("vim ex commands", () => {
     expect(r.text).toBe(T);
   });
 });
+
+describe("vim search", () => {
+  const T = "foo bar foo baz foo";
+  it("/pattern jumps to the next match after the caret", () => {
+    const r = run(T, 0, ["/", "f", "o", "o", "Enter"]);
+    expect(r.caret).toBe(8); // second "foo"
+    expect(r.mode).toBe("normal");
+  });
+  it("n repeats the last search", () => {
+    const r = run(T, 0, ["/", "f", "o", "o", "Enter", "n"]);
+    expect(r.caret).toBe(16); // third "foo"
+  });
+  it("search wraps to the top", () => {
+    const r = run(T, 17, ["/", "f", "o", "o", "Enter"]);
+    expect(r.caret).toBe(0);
+  });
+  it("Escape cancels search mode", () => {
+    const r = run(T, 0, ["/", "x", "Escape"]);
+    expect(r.mode).toBe("normal");
+    expect(r.caret).toBe(0);
+  });
+});
