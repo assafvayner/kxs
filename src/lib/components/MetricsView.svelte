@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api, type MetricsRow } from "../api";
+  import { matchRow } from "../command";
   import type { TabSession } from "../stores/sessions.svelte";
   import VirtualList from "./VirtualList.svelte";
 
@@ -10,6 +11,7 @@
   let error = $state<string | null>(null);
   let loading = $state(true);
   let timer: ReturnType<typeof setInterval> | undefined;
+  const visible = $derived(rows.filter((r) => matchRow(r.name, session.filter)));
 
   async function refresh() {
     try {
@@ -42,7 +44,7 @@
     <div class="rtable-head" style="grid-template-columns: 1.5fr 2.5fr 1fr 1fr;">
       <span>Namespace</span><span>Pod</span><span>CPU (m)</span><span>Mem (Mi)</span>
     </div>
-    <VirtualList items={rows} itemHeight={28}>
+    <VirtualList items={visible} itemHeight={28}>
       {#snippet row(r: MetricsRow)}
         <div class="rtable-row" style="grid-template-columns: 1.5fr 2.5fr 1fr 1fr;">
           <span class="dim">{r.namespace ?? "—"}</span>
