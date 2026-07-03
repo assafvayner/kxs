@@ -20,7 +20,12 @@ pub async fn connect(kubeconfig_yaml: &str, context: &str) -> Result<ClusterSess
         .await
         .map_err(|e| e.to_string())?;
     let default_namespace = config.default_namespace.clone();
-    let client = Client::try_from(config).map_err(|e| e.to_string())?;
+    // exec-auth plugins run blocking subprocesses inside Client::try_from;
+    // keep them off the async worker threads
+    let client = tokio::task::spawn_blocking(move || Client::try_from(config))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     Ok(ClusterSession {
         context: context.to_string(),
         client,
