@@ -112,3 +112,58 @@ describe("vim x and p", () => {
     expect(r.text).toBe("abc");
   });
 });
+
+describe("vim operators", () => {
+  const T = "foo bar\nbaz qux";
+  it("dw deletes to next word", () => {
+    const r = run(T, 0, ["d", "w"]);
+    expect(r.text).toBe("bar\nbaz qux");
+    expect(r.caret).toBe(0);
+  });
+  it("d$ deletes to end of line", () => {
+    const r = run(T, 4, ["d", "$"]);
+    expect(r.text).toBe("foo \nbaz qux");
+  });
+  it("d0 deletes to line start", () => {
+    const r = run(T, 4, ["d", "0"]);
+    expect(r.text).toBe("bar\nbaz qux");
+    expect(r.caret).toBe(0);
+  });
+  it("dd deletes the current line", () => {
+    const r = run(T, 1, ["d", "d"]);
+    expect(r.text).toBe("baz qux");
+    expect(r.caret).toBe(0);
+  });
+  it("dd then p pastes the line below", () => {
+    const r = run(T, 1, ["d", "d", "p"]);
+    expect(r.text).toBe("baz qux\nfoo bar");
+  });
+  it("cw deletes the word and enters insert mode", () => {
+    const r = run(T, 0, ["c", "w"]);
+    expect(r.text).toBe("bar\nbaz qux");
+    expect(r.mode).toBe("insert");
+  });
+  it("cc clears the line and enters insert", () => {
+    const r = run(T, 1, ["c", "c"]);
+    expect(r.text).toBe("\nbaz qux");
+    expect(r.mode).toBe("insert");
+  });
+  it("yw then p copies a word (pasted at the caret)", () => {
+    const r = run(T, 0, ["y", "w", "p"]);
+    // yw yanks "foo " and leaves the caret at 0; p inserts it at the caret.
+    expect(r.text).toBe("foo foo bar\nbaz qux");
+  });
+  it("dG deletes to the last line (linewise)", () => {
+    const r = run("a\nb\nc", 0, ["d", "G"]);
+    expect(r.text).toBe("");
+  });
+  it("dgg deletes to the first line (linewise)", () => {
+    const r = run("a\nb\nc", 4, ["d", "g", "g"]);
+    expect(r.text).toBe("");
+  });
+  it("Escape clears a pending operator", () => {
+    const r = run(T, 0, ["d", "Escape", "l"]);
+    expect(r.text).toBe(T);
+    expect(r.caret).toBe(1); // 'l' still moves after the operator is cancelled
+  });
+});

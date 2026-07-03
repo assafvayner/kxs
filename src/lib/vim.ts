@@ -161,6 +161,10 @@ function handleNormal(e: KeyInput, text: string, caret: number, st: VimState): V
     }
     case "Escape":
       return done(text, caret, { ...st, pending: "", op: null });
+    case "d":
+    case "c":
+    case "y":
+      return done(text, caret, { ...st, op: e.key as "d" | "c" | "y" });
     default:
       return editKeys(e, text, caret, st); // x/dd/yy/p/u etc., filled in Tasks 5/7
   }
@@ -212,8 +216,89 @@ function editKeys(e: KeyInput, text: string, caret: number, st: VimState): VimRe
       return done(text, caret, st); // swallow unmapped keys
   }
 }
-function handleOperator(_e: KeyInput, text: string, caret: number, st: VimState): VimResult {
-  return done(text, caret, { ...st, op: null });
+interface Span {
+  from: number;
+  to: number;
+  linewise: boolean;
+}
+
+// Charwise/linewise range for an operator motion. Returns null while awaiting
+// a second key (operator-pending "g"), which the caller keeps pending.
+function operatorSpan(
+  e: KeyInput,
+  text: string,
+  caret: number,
+  op: "d" | "c" | "y",
+  pending: string,
+): Span | null | "await" {
+  if (pending === "g") {
+    if (e.key === "g") return linewiseSpan(text, caret, 0); // dgg
+    return null; // abort
+  }
+  switch (e.key) {
+    case op:
+      return linewiseSpan(text, caret, caret); // dd/cc/yy
+    case "g":
+      return "await";
+    case "G":
+      return linewiseSpan(text, caret, text.length);
+    case "w":
+      return { from: caret, to: wordForward(text, caret), linewise: false };
+    case "b":
+      return { from: wordBackward(text, caret), to: caret, linewise: false };
+    case "0":
+      return { from: lineStartOf(text, caret), to: caret, linewise: false };
+    case "$":
+      return { from: caret, to: lineEndOf(text, caret), linewise: false };
+    default:
+      return null; // unknown motion => abort operator
+  }
+}
+
+// Linewise span covering the lines touched by carets a..b.
+function linewiseSpan(text: string, a: number, b: number): Span {
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  return { from: lineStartOf(text, lo), to: lineEndOf(text, hi), linewise: true };
+}
+
+function handleOperator(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
+  const op = st.op!;
+  if (e.key === "Escape") return done(text, caret, { ...st, op: null, pending: "" });
+
+  const span = operatorSpan(e, text, caret, op, st.pending);
+  if (span === "await") return done(text, caret, { ...st, pending: "g" });
+  if (span === null) return done(text, caret, { ...st, op: null, pending: "" });
+
+  const { from, to, linewise } = span;
+  const cleared = { ...st, op: null, pending: "" };
+
+  if (op === "y") {
+    const register = text.slice(from, to);
+    return done(text, from, { ...cleared, register, regLinewise: linewise });
+  }
+
+  // d / c: remove the span (linewise also removes one surrounding newline)
+  const st2 = snapshot(cleared, text, caret);
+  const register = text.slice(from, to);
+  let cutFrom = from;
+  let cutTo = to;
+  if (linewise) {
+    if (to < text.length) cutTo = to + 1; // consume trailing newline
+    else if (from > 0) cutFrom = from - 1; // last line: consume leading newline
+  }
+  const newText = text.slice(0, cutFrom) + text.slice(cutTo);
+  const newCaret = Math.min(cutFrom, newText.length);
+  const base = { ...st2, register, regLinewise: linewise };
+  if (op === "c") {
+    if (linewise) {
+      // cc keeps an empty line to type into
+      const reopened = text.slice(0, from) + text.slice(to);
+      return done(reopened, from, { ...base, mode: "insert", regLinewise: linewise });
+    }
+    return done(newText, newCaret, { ...base, mode: "insert" });
+  }
+  return done(newText, newCaret, base);
 }
 function handleEx(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
   return done(text, caret, { ...st, mode: "normal", exBuf: "" });
