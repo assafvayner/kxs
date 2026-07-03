@@ -11,19 +11,22 @@
   let lines = $state<string[]>([]);
   let error = $state<string | null>(null);
   let streamId: number | undefined;
+  let seq = 0;
   const CAP = 10000;
 
   async function start() {
+    const mySeq = ++seq;
     if (streamId !== undefined) {
       api.stopLogs(tabId, streamId).catch(() => {});
       streamId = undefined;
     }
     lines = [];
     try {
-      streamId = await api.streamLogs(
+      const id = await api.streamLogs(
         tabId,
         { namespace, pod, container, follow, tailLines: 1000, timestamps: false },
         (ev) => {
+          if (mySeq !== seq) return; // superseded stream: ignore late events
           if (ev.type === "lines") {
             lines = [...lines, ...ev.lines].slice(-CAP);
           } else if (ev.type === "error") {
@@ -31,8 +34,14 @@
           }
         },
       );
+      if (mySeq !== seq) {
+        // another start() superseded us while awaiting; stop the orphan
+        api.stopLogs(tabId, id).catch(() => {});
+        return;
+      }
+      streamId = id;
     } catch (e) {
-      error = String(e);
+      if (mySeq === seq) error = String(e);
     }
   }
 
