@@ -35,3 +35,29 @@ tr.clickable { cursor: pointer; }
 tr.clickable:hover td { background: var(--bg-hover); }
 .error { background: #3b1c26; color: var(--red); padding: 8px 12px; border-radius: 6px; margin: 8px 0; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.app { display: flex; flex-direction: column; height: 100vh; }
+.app main { flex: 1; overflow: auto; }
+.tabbar {
+  display: flex; gap: 4px; padding: 6px 8px; background: var(--bg-raised);
+  border-bottom: 1px solid var(--border); user-select: none;
+}
+.tab {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+  border-radius: 6px; color: var(--fg-dim); cursor: pointer; font-size: 13px;
+  background: none; border: none;
+}
+.tab:hover { background: var(--bg-hover); color: var(--fg); }
+.tab.active { background: var(--bg-active); color: var(--fg); }
+.tab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-dim); }
+.tab.active .dot { background: var(--green); }
+.tab .close {
+  background: none; border: none; padding: 0 2px; color: var(--fg-dim);
+  font-size: 14px; line-height: 1;
+}
+.tab .close:hover { color: var(--red); }
+.tab.home { font-size: 14px; padding: 4px 8px; }
+.cluster-tab { padding: 24px; }
+.dim { color: var(--fg-dim); }
+.launch { padding: 24px; max-width: 1100px; margin: 0 auto; }
+.launch header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }

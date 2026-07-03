@@ -30,3 +30,11 @@ export function handleKeydown(e: KeyInput, tabs: TabsStore): void {
     e.preventDefault();
   }
 }
+
+/** True when the event target is a typing surface — window-level shortcuts
+ * must not fire while the user edits (ctrl+tab cycling excepted at the call site). */
+export function isEditableTarget(target: unknown): boolean {
+  if (!target || typeof target !== "object") return false;
+  const el = target as { tagName?: string; isContentEditable?: boolean };
+  return el.isContentEditable === true || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName ?? "");
+}

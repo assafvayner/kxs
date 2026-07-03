@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { TabsStore } from "./stores/tabs.svelte";
-import { handleKeydown, type KeyInput } from "./keys";
+import { handleKeydown, isEditableTarget, type KeyInput } from "./keys";
 
 const ev = (
   key: string,
@@ -45,5 +45,18 @@ describe("handleKeydown", () => {
     t.open("b");
     handleKeydown(ev("1", { metaKey: true }), t);
     expect(t.activeId).toBe(t.tabs[0].id);
+  });
+});
+
+describe("isEditableTarget", () => {
+  it("flags inputs and contenteditable", () => {
+    expect(isEditableTarget({ tagName: "INPUT" })).toBe(true);
+    expect(isEditableTarget({ tagName: "TEXTAREA" })).toBe(true);
+    expect(isEditableTarget({ tagName: "SELECT" })).toBe(true);
+    expect(isEditableTarget({ tagName: "DIV", isContentEditable: true })).toBe(true);
+  });
+  it("ignores non-editable targets", () => {
+    expect(isEditableTarget(null)).toBe(false);
+    expect(isEditableTarget({ tagName: "DIV" })).toBe(false);
   });
 });
