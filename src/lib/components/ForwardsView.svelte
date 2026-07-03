@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api, type ForwardInfo } from "../api";
+  import type { TabSession } from "../stores/sessions.svelte";
+  import { matchRow } from "../command";
 
-  let { tabId }: { tabId: number } = $props();
+  let { tabId, session }: { tabId: number; session: TabSession } = $props();
 
   let forwards = $state<ForwardInfo[]>([]);
+  const visible = $derived(forwards.filter((f) => matchRow(`127.0.0.1:${f.localPort}`, session.filter)));
   let error = $state<string | null>(null);
   let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -41,7 +44,7 @@
   <div class="rtable-head" style="grid-template-columns: 2fr 1fr;">
     <span>Local address</span><span></span>
   </div>
-  {#each forwards as fwd (fwd.id)}
+  {#each visible as fwd (fwd.id)}
     <div class="rtable-row" style="grid-template-columns: 2fr 1fr;">
       <span class="mono">127.0.0.1:{fwd.localPort}</span>
       <span><button onclick={() => stop(fwd.id)}>Stop</button></span>

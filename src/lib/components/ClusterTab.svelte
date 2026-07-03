@@ -411,7 +411,7 @@
         pod={s.views.top.pod}
         container={s.views.top.container} />
     {:else if s.views.top.kind === "forwards"}
-      <ForwardsView {tabId} />
+      <ForwardsView {tabId} session={s} />
     {:else if s.views.top.kind === "metrics"}
       <MetricsView {tabId} session={s} />
     {/if}
