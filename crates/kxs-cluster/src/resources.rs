@@ -1,3 +1,6 @@
+use kube::api::{Api, DynamicObject};
+use kube::core::{ApiResource, GroupVersionKind};
+use kube::Client;
 use serde::{Deserialize, Serialize};
 
 pub fn list_path(group: &str, version: &str, plural: &str, namespace: Option<&str>) -> String {
@@ -117,6 +120,97 @@ pub fn map_table(raw: RawTable) -> ResourceTable {
     ResourceTable { columns, rows }
 }
 
+fn api_resource(group: &str, version: &str, kind: &str, plural: &str) -> ApiResource {
+    let mut ar = ApiResource::from_gvk(&GroupVersionKind {
+        group: group.to_string(),
+        version: version.to_string(),
+        kind: kind.to_string(),
+    });
+    ar.plural = plural.to_string();
+    ar
+}
+
+/// Server-side Table list for any kind. `namespace: None` = all namespaces.
+pub async fn list_table(
+    client: Client,
+    group: &str,
+    version: &str,
+    plural: &str,
+    namespace: Option<&str>,
+) -> Result<ResourceTable, String> {
+    let path = list_path(group, version, plural, namespace);
+    let req = http::Request::get(format!("{path}?limit=1000"))
+        .header(
+            http::header::ACCEPT,
+            "application/json;as=Table;v=v1;g=meta.k8s.io,application/json",
+        )
+        .body(Vec::new())
+        .map_err(|e| e.to_string())?;
+    let raw: RawTable = client.request(req).await.map_err(|e| e.to_string())?;
+    Ok(map_table(raw))
+}
+
+/// Full manifest as YAML for one object.
+pub async fn get_yaml(
+    client: Client,
+    group: &str,
+    version: &str,
+    kind: &str,
+    plural: &str,
+    namespace: Option<&str>,
+    name: &str,
+) -> Result<String, String> {
+    let ar = api_resource(group, version, kind, plural);
+    let api: Api<DynamicObject> = match namespace {
+        Some(ns) if !ns.is_empty() => Api::namespaced_with(client, ns, &ar),
+        _ => Api::all_with(client, &ar),
+    };
+    let mut obj = api
+        .get_opt(name)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("{kind} \"{name}\" not found"))?;
+    // managed-fields is noise in a YAML view
+    obj.metadata.managed_fields = None;
+    serde_yaml_ng::to_string(&obj).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceEvent {
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub reason: String,
+    pub message: String,
+    pub count: i32,
+    pub last_seen: Option<String>,
+}
+
+/// Events referencing a given object (best-effort; empty on error).
+pub async fn get_events(client: Client, namespace: Option<&str>, name: &str) -> Vec<ResourceEvent> {
+    use k8s_openapi::api::core::v1::Event;
+    use kube::api::ListParams;
+    let api: Api<Event> = match namespace {
+        Some(ns) if !ns.is_empty() => Api::namespaced(client, ns),
+        _ => Api::all(client),
+    };
+    let lp = ListParams::default().fields(&format!("involvedObject.name={name}"));
+    let list = match api.list(&lp).await {
+        Ok(l) => l,
+        Err(_) => return Vec::new(),
+    };
+    list.items
+        .into_iter()
+        .map(|e| ResourceEvent {
+            type_: e.type_.unwrap_or_default(),
+            reason: e.reason.unwrap_or_default(),
+            message: e.message.unwrap_or_default(),
+            count: e.count.unwrap_or(0),
+            last_seen: e.last_timestamp.map(|t| t.0.to_rfc3339()),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,5 +287,43 @@ mod tests {
         let t = map_table(raw);
         assert_eq!(t.rows[0].key, "node-1");
         assert_eq!(t.rows[0].namespace, None);
+    }
+
+    /// Run manually: cargo test -p kxs-cluster -- --ignored (needs kind-local in ~/.kube/config)
+    #[tokio::test]
+    #[ignore]
+    async fn lists_deployments_as_table_on_kind_local() {
+        let session = kind_session().await;
+        let t = super::list_table(session.client.clone(), "apps", "v1", "deployments", None)
+            .await
+            .unwrap();
+        assert!(t.columns.iter().any(|c| c == "Name"));
+        assert!(t.columns.last().map(|c| c == "Age").unwrap_or(false));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn gets_namespace_yaml_on_kind_local() {
+        let session = kind_session().await;
+        let y = super::get_yaml(
+            session.client.clone(),
+            "",
+            "v1",
+            "Namespace",
+            "namespaces",
+            None,
+            "default",
+        )
+        .await
+        .unwrap();
+        assert!(y.contains("kind: Namespace"));
+        assert!(y.contains("name: default"));
+    }
+
+    async fn kind_session() -> crate::session::ClusterSession {
+        let paths = kxs_core::kubeconfig::paths::kubeconfig_paths();
+        let store = kxs_core::kubeconfig::store::KubeconfigStore::load(paths).unwrap();
+        let yaml = crate::bridge::kubeconfig_yaml_for_context(&store, "kind-local").unwrap();
+        crate::session::connect(&yaml, "kind-local").await.unwrap()
     }
 }
