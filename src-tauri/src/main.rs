@@ -40,7 +40,15 @@ fn main() {
             cluster_ipc::delete_resource,
             cluster_ipc::scale_resource,
             cluster_ipc::restart_resource,
-            cluster_ipc::cordon_node
+            cluster_ipc::cordon_node,
+            cluster_ipc::start_exec,
+            cluster_ipc::exec_stdin,
+            cluster_ipc::exec_resize,
+            cluster_ipc::stop_exec,
+            cluster_ipc::start_forward,
+            cluster_ipc::stop_forward,
+            cluster_ipc::list_forwards,
+            cluster_ipc::pod_metrics
         ])
         .setup(move |app| {
             watcher::spawn(app.handle().clone(), paths);

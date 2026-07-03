@@ -1,3 +1,4 @@
+use kxs_cluster::exec::{exec, ExecEvent, ExecHandle};
 use kxs_cluster::pods::{run_pod_watch, PodEvent};
 use kxs_cluster::session::ClusterSession;
 use serde::Serialize;
@@ -18,6 +19,10 @@ pub struct SessionHandle {
     pub pod_stop: Option<oneshot::Sender<()>>,
     pub log_stops: HashMap<u32, oneshot::Sender<()>>,
     pub next_log_id: u32,
+    pub execs: HashMap<u32, ExecHandle>,
+    pub next_exec_id: u32,
+    pub forwards: HashMap<u32, (u16, oneshot::Sender<()>)>,
+    pub next_forward_id: u32,
 }
 
 impl SessionHandle {
@@ -28,7 +33,19 @@ impl SessionHandle {
         for (_, stop) in self.log_stops {
             let _ = stop.send(());
         }
+        for (_, handle) in self.execs {
+            let _ = handle.stop.send(());
+        }
+        for (_, (_, stop)) in self.forwards {
+            let _ = stop.send(());
+        }
     }
+}
+
+fn base64_decode(data: &str) -> Result<Vec<u8>, String> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    STANDARD.decode(data).map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]
@@ -75,6 +92,10 @@ pub async fn open_session(
             pod_stop: None,
             log_stops: HashMap::new(),
             next_log_id: 0,
+            execs: HashMap::new(),
+            next_exec_id: 0,
+            forwards: HashMap::new(),
+            next_forward_id: 0,
         },
     ) {
         old.stop_all();
@@ -387,4 +408,155 @@ pub async fn cordon_node(
         kxs_cluster::edit::cordon_patch(unschedulable),
     )
     .await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn start_exec(
+    tab_id: u32,
+    namespace: String,
+    pod: String,
+    container: Option<String>,
+    command: Vec<String>,
+    cols: u16,
+    rows: u16,
+    channel: Channel<ExecEvent>,
+    sessions: State<'_, Sessions>,
+) -> Result<u32, String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    let handle = exec(
+        client,
+        &namespace,
+        &pod,
+        container.as_deref(),
+        command,
+        cols,
+        rows,
+        move |ev| channel.send(ev).is_ok(),
+    )
+    .await?;
+    let mut map = sessions.0.lock().await;
+    let h = map.get_mut(&tab_id).ok_or("no session for tab")?;
+    let id = h.next_exec_id;
+    h.next_exec_id += 1;
+    h.execs.insert(id, handle);
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn exec_stdin(
+    tab_id: u32,
+    exec_id: u32,
+    data: String,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    // data is base64 (raw keystroke bytes)
+    let bytes = base64_decode(&data)?;
+    let map = sessions.0.lock().await;
+    let h = map.get(&tab_id).ok_or("no session for tab")?;
+    let ex = h.execs.get(&exec_id).ok_or("no exec")?;
+    ex.stdin.send(bytes).map_err(|_| "exec closed".to_string())
+}
+
+#[tauri::command]
+pub async fn exec_resize(
+    tab_id: u32,
+    exec_id: u32,
+    cols: u16,
+    rows: u16,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let map = sessions.0.lock().await;
+    if let Some(h) = map.get(&tab_id) {
+        if let Some(ex) = h.execs.get(&exec_id) {
+            let _ = ex.resize.send((cols, rows));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_exec(
+    tab_id: u32,
+    exec_id: u32,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let mut map = sessions.0.lock().await;
+    if let Some(h) = map.get_mut(&tab_id) {
+        if let Some(ex) = h.execs.remove(&exec_id) {
+            let _ = ex.stop.send(());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardInfo {
+    pub id: u32,
+    pub local_port: u16,
+}
+
+#[tauri::command]
+pub async fn start_forward(
+    tab_id: u32,
+    namespace: String,
+    pod: String,
+    pod_port: u16,
+    sessions: State<'_, Sessions>,
+) -> Result<ForwardInfo, String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    let (stop_tx, stop_rx) = oneshot::channel();
+    let (local_port, _handle) =
+        kxs_cluster::portforward::start(client, namespace, pod, pod_port, stop_rx).await?;
+    let mut map = sessions.0.lock().await;
+    let h = map.get_mut(&tab_id).ok_or("no session for tab")?;
+    let id = h.next_forward_id;
+    h.next_forward_id += 1;
+    h.forwards.insert(id, (local_port, stop_tx));
+    Ok(ForwardInfo { id, local_port })
+}
+
+#[tauri::command]
+pub async fn stop_forward(
+    tab_id: u32,
+    forward_id: u32,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let mut map = sessions.0.lock().await;
+    if let Some(h) = map.get_mut(&tab_id) {
+        if let Some((_, stop)) = h.forwards.remove(&forward_id) {
+            let _ = stop.send(());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_forwards(
+    tab_id: u32,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<ForwardInfo>, String> {
+    let map = sessions.0.lock().await;
+    let h = map.get(&tab_id).ok_or("no session for tab")?;
+    let mut v: Vec<ForwardInfo> = h
+        .forwards
+        .iter()
+        .map(|(id, (p, _))| ForwardInfo {
+            id: *id,
+            local_port: *p,
+        })
+        .collect();
+    v.sort_by_key(|f| f.id);
+    Ok(v)
+}
+
+#[tauri::command]
+pub async fn pod_metrics(
+    tab_id: u32,
+    namespace: Option<String>,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<kxs_cluster::metrics::MetricsRow>, String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    kxs_cluster::metrics::pod_metrics(client, namespace.as_deref()).await
 }

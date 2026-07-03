@@ -14,3 +14,4 @@ notify = "8"
 kxs-core = { path = "../crates/kxs-core" }
 kxs-cluster = { path = "../crates/kxs-cluster" }
 tokio = { version = "1", features = ["sync", "time"] }
+base64 = "0.22"
