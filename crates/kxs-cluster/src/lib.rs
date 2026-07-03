@@ -3,6 +3,7 @@ pub mod discovery;
 pub mod edit;
 pub mod exec;
 pub mod logs;
+pub mod metrics;
 pub mod pods;
 pub mod portforward;
 pub mod resources;
