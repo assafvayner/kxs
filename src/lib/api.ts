@@ -92,6 +92,21 @@ export type PodEvent =
   | { type: "delete"; keys: string[] }
   | { type: "status"; state: string; message: string | null };
 
+export interface LogRequest {
+  namespace: string;
+  pod: string;
+  container?: string;
+  follow: boolean;
+  tailLines?: number;
+  sinceSeconds?: number;
+  timestamps: boolean;
+}
+
+export type LogEvent =
+  | { type: "lines"; lines: string[] }
+  | { type: "error"; message: string }
+  | { type: "eof" };
+
 export const api = {
   listContexts: () => invoke<KubeconfigView>("list_contexts"),
   getContext: (name: string) => invoke<ContextDetail>("get_context", { name }),
@@ -107,4 +122,13 @@ export const api = {
     channel.onmessage = onEvent;
     return invoke<void>("watch_pods", { tabId, namespace, channel });
   },
+  listContainers: (tabId: number, namespace: string, pod: string) =>
+    invoke<string[]>("list_containers", { tabId, namespace, pod }),
+  streamLogs: (tabId: number, request: LogRequest, onEvent: (e: LogEvent) => void) => {
+    const channel = new Channel<LogEvent>();
+    channel.onmessage = onEvent;
+    return invoke<number>("stream_logs", { tabId, request, channel });
+  },
+  stopLogs: (tabId: number, streamId: number) =>
+    invoke<void>("stop_logs", { tabId, streamId }),
 };

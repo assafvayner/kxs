@@ -16,11 +16,16 @@ pub struct Sessions(pub Mutex<HashMap<u32, SessionHandle>>);
 pub struct SessionHandle {
     pub session: Arc<ClusterSession>,
     pub pod_stop: Option<oneshot::Sender<()>>,
+    pub log_stops: HashMap<u32, oneshot::Sender<()>>,
+    pub next_log_id: u32,
 }
 
 impl SessionHandle {
     fn stop_all(self) {
         if let Some(stop) = self.pod_stop {
+            let _ = stop.send(());
+        }
+        for (_, stop) in self.log_stops {
             let _ = stop.send(());
         }
     }
@@ -58,6 +63,8 @@ pub async fn open_session(
         SessionHandle {
             session: Arc::new(session),
             pod_stop: None,
+            log_stops: HashMap::new(),
+            next_log_id: 0,
         },
     ) {
         old.stop_all();
@@ -109,5 +116,60 @@ pub async fn watch_pods(
         move |ev| channel.send(ev).is_ok(),
         stop_rx,
     ));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_containers(
+    tab_id: u32,
+    namespace: String,
+    pod: String,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<String>, String> {
+    let session = {
+        let map = sessions.0.lock().await;
+        map.get(&tab_id)
+            .map(|h| h.session.clone())
+            .ok_or("no session for tab")?
+    };
+    kxs_cluster::logs::list_containers(session.client.clone(), &namespace, &pod).await
+}
+
+#[tauri::command]
+pub async fn stream_logs(
+    tab_id: u32,
+    request: kxs_cluster::logs::LogRequest,
+    channel: Channel<kxs_cluster::logs::LogEvent>,
+    sessions: State<'_, Sessions>,
+) -> Result<u32, String> {
+    let (stop_tx, stop_rx) = oneshot::channel();
+    let (client, id) = {
+        let mut map = sessions.0.lock().await;
+        let handle = map.get_mut(&tab_id).ok_or("no session for tab")?;
+        let id = handle.next_log_id;
+        handle.next_log_id += 1;
+        handle.log_stops.insert(id, stop_tx);
+        (handle.session.client.clone(), id)
+    };
+    tauri::async_runtime::spawn(kxs_cluster::logs::run_log_stream(
+        client,
+        request,
+        move |ev| channel.send(ev).is_ok(),
+        stop_rx,
+    ));
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn stop_logs(
+    tab_id: u32,
+    stream_id: u32,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    if let Some(handle) = sessions.0.lock().await.get_mut(&tab_id) {
+        if let Some(stop) = handle.log_stops.remove(&stream_id) {
+            let _ = stop.send(());
+        }
+    }
     Ok(())
 }

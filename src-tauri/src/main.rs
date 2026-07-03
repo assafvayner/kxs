@@ -28,7 +28,10 @@ fn main() {
             cluster_ipc::open_session,
             cluster_ipc::close_session,
             cluster_ipc::list_namespaces,
-            cluster_ipc::watch_pods
+            cluster_ipc::watch_pods,
+            cluster_ipc::list_containers,
+            cluster_ipc::stream_logs,
+            cluster_ipc::stop_logs
         ])
         .setup(move |app| {
             watcher::spawn(app.handle().clone(), paths);
