@@ -4,5 +4,6 @@ pub mod edit;
 pub mod exec;
 pub mod logs;
 pub mod pods;
+pub mod portforward;
 pub mod resources;
 pub mod session;
