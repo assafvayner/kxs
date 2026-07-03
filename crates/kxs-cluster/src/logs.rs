@@ -94,6 +94,9 @@ pub async fn run_log_stream(
                     return;
                 }
                 Err(e) => {
+                    if !batch.is_empty() {
+                        let _ = send(LogEvent::Lines { lines: std::mem::take(&mut batch) });
+                    }
                     let _ = send(LogEvent::Error { message: e.to_string() });
                     return;
                 }

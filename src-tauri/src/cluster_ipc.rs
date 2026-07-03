@@ -11,7 +11,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::ipc::AppState;
 
 #[derive(Default)]
-pub struct Sessions(pub Mutex<HashMap<u32, SessionHandle>>);
+pub struct Sessions(pub Arc<Mutex<HashMap<u32, SessionHandle>>>);
 
 pub struct SessionHandle {
     pub session: Arc<ClusterSession>,
@@ -151,12 +151,20 @@ pub async fn stream_logs(
         handle.log_stops.insert(id, stop_tx);
         (handle.session.client.clone(), id)
     };
-    tauri::async_runtime::spawn(kxs_cluster::logs::run_log_stream(
-        client,
-        request,
-        move |ev| channel.send(ev).is_ok(),
-        stop_rx,
-    ));
+    let map = sessions.0.clone();
+    tauri::async_runtime::spawn(async move {
+        kxs_cluster::logs::run_log_stream(
+            client,
+            request,
+            move |ev| channel.send(ev).is_ok(),
+            stop_rx,
+        )
+        .await;
+        // prune our own stop entry once the stream ends (Eof/Error/stop)
+        if let Some(handle) = map.lock().await.get_mut(&tab_id) {
+            handle.log_stops.remove(&id);
+        }
+    });
     Ok(id)
 }
 
