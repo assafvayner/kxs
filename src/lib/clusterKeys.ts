@@ -1,6 +1,6 @@
 export interface ClusterActions {
   openCommand(): void;
-  openFilter(): void;
+  focusSearch(): void;
   back(): void;
   describe(): void;
   yaml(): void;
@@ -38,7 +38,7 @@ export function handleClusterKey(e: ClusterKeyInput, a: ClusterActions): boolean
       e.preventDefault();
       return true;
     case "/":
-      a.openFilter();
+      a.focusSearch();
       e.preventDefault();
       return true;
     case "Escape":

@@ -4,7 +4,7 @@ import { handleClusterKey, type ClusterActions } from "./clusterKeys";
 function actions(overrides: Partial<ClusterActions> = {}): ClusterActions {
   return {
     openCommand: vi.fn(),
-    openFilter: vi.fn(),
+    focusSearch: vi.fn(),
     back: vi.fn(),
     describe: vi.fn(),
     yaml: vi.fn(),
@@ -23,10 +23,10 @@ function actions(overrides: Partial<ClusterActions> = {}): ClusterActions {
 const ev = (key: string, mods: any = {}) => ({ key, ctrlKey: false, metaKey: false, shiftKey: false, preventDefault: vi.fn(), ...mods });
 
 describe("handleClusterKey", () => {
-  it(": opens command, / opens filter", () => {
+  it(": opens command, / focuses search", () => {
     const a = actions();
     const e1 = ev(":"); expect(handleClusterKey(e1, a)).toBe(true); expect(a.openCommand).toHaveBeenCalled();
-    const e2 = ev("/"); expect(handleClusterKey(e2, a)).toBe(true); expect(a.openFilter).toHaveBeenCalled();
+    const e2 = ev("/"); expect(handleClusterKey(e2, a)).toBe(true); expect(a.focusSearch).toHaveBeenCalled();
   });
   it("esc pops the view", () => {
     const a = actions();

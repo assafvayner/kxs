@@ -1,4 +1,5 @@
 import type { ResourceKind } from "./api";
+import type { View } from "./stores/viewstack.svelte";
 
 export function resolveKind(kinds: ResourceKind[], query: string): ResourceKind | null {
   const q = query.trim().toLowerCase();
@@ -34,4 +35,19 @@ export function matchRow(name: string, filter: string): boolean {
     }
   }
   return name.toLowerCase().includes(f.toLowerCase());
+}
+
+/** Label for the resource switcher: nearest pods/resource view kind from the top, else "Pods". */
+export function currentKindLabel(views: View[]): string {
+  for (let i = views.length - 1; i >= 0; i--) {
+    const v = views[i];
+    if (v.kind === "pods") return "Pods";
+    if (v.kind === "resource") return v.resourceKind.kind;
+  }
+  return "Pods";
+}
+
+/** The search bar is active for every view except the exec terminal. */
+export function searchEnabled(view: View): boolean {
+  return view.kind !== "exec";
 }

@@ -130,6 +130,8 @@ tr.clickable:hover td { background: var(--bg-hover); }
 .detail-body.logs { white-space: pre-wrap; }
 .detail-body.logs.nowrap { white-space: pre; }
 .detail-body .hl { background: #3b331c; }
+.hltext { margin: 0; }
+.hltext .hl { background: #3b331c; }
 .yaml-editor { flex: 1; width: 100%; resize: none; border: none; border-radius: 0; padding: 12px 16px; font-size: 12px; line-height: 1.5; background: var(--bg); color: var(--fg); }
 .yaml-editor:focus { outline: none; }
 .apply-err { color: var(--red); background: #3b1c26; margin: 0; padding: 8px 16px; max-height: 30%; overflow: auto; white-space: pre-wrap; }
@@ -157,3 +159,18 @@ table.events td, table.events th { font-size: 12px; }
 .settings-body { padding: 16px; }
 .setting-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .vim-mode { color: var(--fg-dim); margin-left: auto; }
+.respick { position: relative; display: flex; align-items: center; }
+.respick-btn { background: var(--bg-active); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+.respick-btn:hover { background: var(--bg-hover); border-color: var(--accent); }
+.respick-btn .caret { color: var(--fg-dim); margin-left: 4px; }
+.respick-panel { position: absolute; top: 100%; left: 0; z-index: 20; margin-top: 4px; display: flex; flex-direction: column; min-width: 260px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 6px; }
+.respick-panel input { margin: 6px; }
+.respick-list { display: flex; flex-direction: column; max-height: 320px; overflow: auto; }
+
+.searchbar { display: flex; align-items: center; gap: 4px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 6px; padding: 0 8px; }
+.searchbar .mag { color: var(--fg-dim); font-size: 12px; }
+.searchbar input { border: none; background: none; padding: 5px 2px; font-size: 13px; min-width: 12rem; }
+.searchbar input:focus { border: none; }
+.searchbar.disabled { opacity: 0.4; }
+.searchbar .clear { background: none; border: none; color: var(--fg-dim); padding: 0 2px; cursor: pointer; font-size: 15px; line-height: 1; }
+.searchbar .clear:hover { color: var(--fg); background: none; border: none; }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { resolveKind, matchRow, fuzzyKinds } from "./command";
+import { currentKindLabel } from "./command";
+import { searchEnabled } from "./command";
 import type { ResourceKind } from "./api";
+import type { View } from "./stores/viewstack.svelte";
 
 const kinds: ResourceKind[] = [
   { group: "", version: "v1", kind: "Pod", plural: "pods", namespaced: true, aliases: ["po", "pod", "pods"] },
@@ -44,5 +47,55 @@ describe("matchRow", () => {
   });
   it("empty filter matches everything", () => {
     expect(matchRow("anything", "")).toBe(true);
+  });
+});
+
+describe("currentKindLabel", () => {
+  const dep: ResourceKind = {
+    group: "apps", version: "v1", kind: "Deployment", plural: "deployments",
+    namespaced: true, aliases: ["deploy"],
+  };
+
+  it("returns Pods for the base pods stack", () => {
+    expect(currentKindLabel([{ kind: "pods" }])).toBe("Pods");
+  });
+
+  it("returns the resource kind when a resource view is on top", () => {
+    expect(currentKindLabel([{ kind: "pods" }, { kind: "resource", resourceKind: dep }])).toBe(
+      "Deployment",
+    );
+  });
+
+  it("returns the underlying resource kind when a detail view is on top", () => {
+    const views: View[] = [
+      { kind: "pods" },
+      { kind: "resource", resourceKind: dep },
+      { kind: "describe", title: "Deployment web", namespace: "default", name: "web", body: "" },
+    ];
+    expect(currentKindLabel(views)).toBe("Deployment");
+  });
+
+  it("falls back to Pods when no pods/resource view is in the stack", () => {
+    expect(currentKindLabel([{ kind: "metrics" }])).toBe("Pods");
+  });
+});
+
+describe("searchEnabled", () => {
+  it("is disabled only on the exec terminal", () => {
+    expect(searchEnabled({ kind: "exec", namespace: "default", pod: "p", container: null })).toBe(false);
+  });
+  it("is enabled on pods, resource, describe, yaml, logs, metrics, forwards", () => {
+    expect(searchEnabled({ kind: "pods" })).toBe(true);
+    expect(
+      searchEnabled({
+        kind: "resource",
+        resourceKind: { group: "apps", version: "v1", kind: "Deployment", plural: "deployments", namespaced: true, aliases: [] },
+      }),
+    ).toBe(true);
+    expect(searchEnabled({ kind: "describe", title: "t", namespace: "default", name: "n", body: "" })).toBe(true);
+    expect(searchEnabled({ kind: "yaml", title: "t", body: "" })).toBe(true);
+    expect(searchEnabled({ kind: "logs", namespace: "default", pod: "p" })).toBe(true);
+    expect(searchEnabled({ kind: "metrics" })).toBe(true);
+    expect(searchEnabled({ kind: "forwards" })).toBe(true);
   });
 });
