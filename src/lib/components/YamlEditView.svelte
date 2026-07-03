@@ -11,6 +11,7 @@
     resourceKind,
     namespace,
     name,
+    onClose,
   }: {
     tabId: number;
     title: string;
@@ -18,6 +19,7 @@
     resourceKind: ResourceKind;
     namespace: string | null;
     name: string;
+    onClose: () => void;
   } = $props();
 
   // svelte-ignore state_referenced_locally -- one-time seed of the draft from the initial prop value
@@ -52,7 +54,15 @@
   }
 
   async function onEditorKeydown(e: KeyboardEvent) {
-    if (!vimOn || !ta) return;
+    if (!vimOn) {
+      // no vim: Escape backs out of the editor (app convention)
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+      return;
+    }
+    if (!ta) return;
     const caret = ta.selectionStart ?? 0;
     const r = vimKey(e, draft, caret, vimState);
     vimState = r.state;
@@ -61,8 +71,20 @@
     if (r.text !== draft) draft = r.text;
     await tick();
     if (!ta) return;
-    ta.selectionStart = ta.selectionEnd = r.caret;
-    if (r.effect === "apply" && !busy && dirty) apply();
+    if (r.effect !== "close" && r.effect !== "applyClose") {
+      ta.selectionStart = ta.selectionEnd = r.caret;
+    }
+    if (r.effect === "apply") {
+      if (!busy && dirty) apply();
+    } else if (r.effect === "close") {
+      onClose();
+    } else if (r.effect === "applyClose") {
+      if (!busy && dirty) {
+        if (await apply()) onClose();
+      } else {
+        onClose();
+      }
+    }
   }
 
   async function validate() {
@@ -76,14 +98,16 @@
       busy = false;
     }
   }
-  async function apply() {
+  async function apply(): Promise<boolean> {
     busy = true;
     try {
       await api.applyYaml(tabId, resourceKind, namespace, name, draft, false);
       saved = draft;
       status = { kind: "ok", msg: "Applied" };
+      return true;
     } catch (e) {
       status = { kind: "err", msg: String(e) };
+      return false;
     } finally {
       busy = false;
     }

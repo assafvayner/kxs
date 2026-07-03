@@ -14,7 +14,7 @@ export interface VimState {
   undoStack: Array<{ text: string; caret: number }>;
 }
 
-export type VimEffect = "apply";
+export type VimEffect = "apply" | "close" | "applyClose";
 
 export interface VimResult {
   text: string;
@@ -351,6 +351,8 @@ function execEx(text: string, caret: number, st: VimState): VimResult {
   const normal = { ...st, mode: "normal" as VimMode, exBuf: "" };
 
   if (buf === "w") return done(text, caret, normal, "apply");
+  if (buf === "q") return done(text, caret, normal, "close");
+  if (buf === "wq") return done(text, caret, normal, "applyClose");
 
   const m = buf.match(/^(\d+)(?:,(\d+))?([dy])?$/);
   if (!m) return done(text, caret, normal);

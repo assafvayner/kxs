@@ -218,6 +218,16 @@ describe("vim ex commands", () => {
     expect(r.mode).toBe("normal");
     expect(r.text).toBe(T);
   });
+  it(":q emits the close effect", () => {
+    const r = run("l1\nl2", 0, [":", "q", "Enter"]);
+    expect(r.effect).toBe("close");
+    expect(r.mode).toBe("normal");
+  });
+  it(":wq emits the applyClose effect", () => {
+    const r = run("l1\nl2", 0, [":", "w", "q", "Enter"]);
+    expect(r.effect).toBe("applyClose");
+    expect(r.mode).toBe("normal");
+  });
 });
 
 describe("vim search", () => {

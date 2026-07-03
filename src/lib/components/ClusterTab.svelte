@@ -418,7 +418,8 @@
         body={s.views.top.body}
         resourceKind={s.views.top.resourceKind}
         namespace={s.views.top.namespace}
-        name={s.views.top.name} />
+        name={s.views.top.name}
+        onClose={() => popView()} />
     {:else if s.views.top.kind === "describe"}
       <DescribeView
         {tabId}
