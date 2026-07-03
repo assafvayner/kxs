@@ -297,6 +297,17 @@ mod tests {
         )
         .await
         .unwrap();
+        // cleanup the namespace too (best-effort; deletion is async)
+        let _ = delete_resource(
+            s.client.clone(),
+            "",
+            "v1",
+            "Namespace",
+            "namespaces",
+            None,
+            "kxs-e2e",
+        )
+        .await;
     }
 
     #[tokio::test]
