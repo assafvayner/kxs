@@ -107,6 +107,33 @@ export type LogEvent =
   | { type: "error"; message: string }
   | { type: "eof" };
 
+export interface ResourceKind {
+  group: string;
+  version: string;
+  kind: string;
+  plural: string;
+  namespaced: boolean;
+  aliases: string[];
+}
+export interface ResourceRow {
+  key: string;
+  name: string;
+  namespace: string | null;
+  cells: string[];
+  created: string | null;
+}
+export interface ResourceTable {
+  columns: string[];
+  rows: ResourceRow[];
+}
+export interface ResourceEvent {
+  type: string;
+  reason: string;
+  message: string;
+  count: number;
+  lastSeen: string | null;
+}
+
 export const api = {
   listContexts: () => invoke<KubeconfigView>("list_contexts"),
   getContext: (name: string) => invoke<ContextDetail>("get_context", { name }),
@@ -131,4 +158,25 @@ export const api = {
   },
   stopLogs: (tabId: number, streamId: number) =>
     invoke<void>("stop_logs", { tabId, streamId }),
+  listResourceKinds: (tabId: number) =>
+    invoke<ResourceKind[]>("list_resource_kinds", { tabId }),
+  listResourceTable: (
+    tabId: number,
+    group: string,
+    version: string,
+    plural: string,
+    namespace: string | null,
+  ) => invoke<ResourceTable>("list_resource_table", { tabId, group, version, plural, namespace }),
+  getResourceYaml: (tabId: number, k: ResourceKind, namespace: string | null, name: string) =>
+    invoke<string>("get_resource_yaml", {
+      tabId,
+      group: k.group,
+      version: k.version,
+      kind: k.kind,
+      plural: k.plural,
+      namespace,
+      name,
+    }),
+  getResourceEvents: (tabId: number, namespace: string | null, name: string) =>
+    invoke<ResourceEvent[]>("get_resource_events", { tabId, namespace, name }),
 };
