@@ -53,6 +53,19 @@ function colOf(text: string, pos: number): number {
   return pos - lineStartOf(text, pos);
 }
 
+// 1-based inclusive line range -> {start of first line, end of last line (excl. trailing \n)}
+function lineNumberRange(text: string, m: number, n: number): { start: number; end: number } {
+  const lines = text.split("\n");
+  const lo = Math.min(Math.max(Math.min(m, n), 1), lines.length);
+  const hi = Math.min(Math.max(Math.max(m, n), 1), lines.length);
+  let start = 0;
+  for (let i = 0; i < lo - 1; i++) start += lines[i].length + 1;
+  let end = start;
+  for (let i = lo - 1; i < hi; i++) end += lines[i].length + (i > lo - 1 ? 1 : 0);
+  // 'end' now points at the end of the hi-th line's content
+  return { start, end };
+}
+
 function charClass(c: string): 0 | 1 | 2 {
   if (/\s/.test(c)) return 0;
   if (/\w/.test(c)) return 1;
@@ -165,6 +178,8 @@ function handleNormal(e: KeyInput, text: string, caret: number, st: VimState): V
     case "c":
     case "y":
       return done(text, caret, { ...st, op: e.key as "d" | "c" | "y" });
+    case ":":
+      return done(text, caret, { ...st, mode: "ex", exBuf: "" });
     default:
       return editKeys(e, text, caret, st); // x/dd/yy/p/u etc., filled in Tasks 5/7
   }
@@ -307,7 +322,53 @@ function handleOperator(e: KeyInput, text: string, caret: number, st: VimState):
   return done(newText, newCaret, base);
 }
 function handleEx(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
-  return done(text, caret, { ...st, mode: "normal", exBuf: "" });
+  if (e.key === "Escape") return done(text, caret, { ...st, mode: "normal", exBuf: "" });
+  if (e.key === "Backspace") {
+    return done(text, caret, { ...st, exBuf: st.exBuf.slice(0, -1) });
+  }
+  if (e.key === "Enter") return execEx(text, caret, st);
+  if (e.key.length === 1) return done(text, caret, { ...st, exBuf: st.exBuf + e.key });
+  return pass(text, caret, st);
+}
+
+function execEx(text: string, caret: number, st: VimState): VimResult {
+  const buf = st.exBuf.trim();
+  const normal = { ...st, mode: "normal" as VimMode, exBuf: "" };
+
+  if (buf === "w") return done(text, caret, normal, "apply");
+
+  const m = buf.match(/^(\d+)(?:,(\d+))?([dy])?$/);
+  if (!m) return done(text, caret, normal);
+
+  const a = Number(m[1]);
+  const b = m[2] ? Number(m[2]) : a;
+  const action = m[3];
+
+  if (!action) {
+    // :N -> jump to start of line N
+    const { start } = lineNumberRange(text, a, a);
+    return done(text, start, normal);
+  }
+
+  const { start, end } = lineNumberRange(text, a, b);
+  const register = text.slice(start, end);
+
+  if (action === "y") {
+    return done(text, start, { ...normal, register, regLinewise: true });
+  }
+
+  // action === "d": delete the lines incl. one surrounding newline
+  const st2 = snapshot(normal, text, caret);
+  let cutFrom = start;
+  let cutTo = end;
+  if (end < text.length) cutTo = end + 1;
+  else if (start > 0) cutFrom = start - 1;
+  const newText = text.slice(0, cutFrom) + text.slice(cutTo);
+  return done(newText, Math.min(cutFrom, newText.length), {
+    ...st2,
+    register,
+    regLinewise: true,
+  });
 }
 function handleSearch(e: KeyInput, text: string, caret: number, st: VimState): VimResult {
   return done(text, caret, { ...st, mode: "normal", searchBuf: "" });

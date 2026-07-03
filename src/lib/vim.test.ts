@@ -188,3 +188,34 @@ describe("vim undo", () => {
     expect(r.text).toBe("abc");
   });
 });
+
+describe("vim ex commands", () => {
+  const T = "l1\nl2\nl3\nl4";
+  it(": then N jumps to that line", () => {
+    const r = run(T, 0, [":", "3", "Enter"]);
+    expect(r.caret).toBe(6); // start of "l3"
+    expect(r.mode).toBe("normal");
+  });
+  it(":Nd deletes a single line", () => {
+    const r = run(T, 0, [":", "2", "d", "Enter"]);
+    expect(r.text).toBe("l1\nl3\nl4");
+  });
+  it(":M,Nd deletes a line range", () => {
+    const r = run(T, 0, [":", "2", ",", "3", "d", "Enter"]);
+    expect(r.text).toBe("l1\nl4");
+  });
+  it(":Ny yanks a line so p pastes it", () => {
+    const r = run(T, 0, [":", "2", "y", "Enter", "p"]);
+    expect(r.text).toBe("l1\nl2\nl2\nl3\nl4");
+  });
+  it(":w emits the apply effect", () => {
+    const r = run(T, 0, [":", "w", "Enter"]);
+    expect(r.effect).toBe("apply");
+    expect(r.mode).toBe("normal");
+  });
+  it("Escape cancels ex mode", () => {
+    const r = run(T, 0, [":", "9", "Escape"]);
+    expect(r.mode).toBe("normal");
+    expect(r.text).toBe(T);
+  });
+});
