@@ -401,7 +401,8 @@
         title={s.views.top.title}
         namespace={s.views.top.namespace}
         name={s.views.top.name}
-        body={s.views.top.body} />
+        body={s.views.top.body}
+        session={s} />
     {:else if s.views.top.kind === "logs"}
       <LogsView {tabId} namespace={s.views.top.namespace} pod={s.views.top.pod} session={s} />
     {:else if s.views.top.kind === "exec"}
