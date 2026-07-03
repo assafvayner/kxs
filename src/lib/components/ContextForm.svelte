@@ -4,6 +4,7 @@
   import { contexts } from "../stores/contexts.svelte";
 
   let { name = null, onclose }: { name?: string | null; onclose: () => void } = $props();
+  // svelte-ignore state_referenced_locally -- `name` is fixed for this component instance; LaunchScreen unmounts the form before it can change
   const isEdit = name !== null;
 
   let error = $state<string | null>(null);
@@ -96,7 +97,7 @@
           ? { existing: userRef }
           : {
               name: userName.trim(),
-              token: authMethod === "token" ? token || undefined : undefined,
+              token: authMethod === "token" ? token.trim() || undefined : undefined,
               clientCertificate: authMethod === "cert" ? certFile.trim() || undefined : undefined,
               clientKey: authMethod === "cert" ? keyFile.trim() || undefined : undefined,
               clientCertificateData: authMethod === "cert" ? certData.trim() || undefined : undefined,
@@ -105,12 +106,14 @@
               execArgs: authMethod === "exec" ? lines(execArgsText) : undefined,
               execEnv:
                 authMethod === "exec"
-                  ? lines(execEnvText).map((l) => {
-                      const i = l.indexOf("=");
-                      return [l.slice(0, i), l.slice(i + 1)] as [string, string];
-                    })
+                  ? lines(execEnvText)
+                      .filter((l) => l.includes("="))
+                      .map((l) => {
+                        const i = l.indexOf("=");
+                        return [l.slice(0, i), l.slice(i + 1)] as [string, string];
+                      })
                   : undefined,
-              execApiVersion: authMethod === "exec" ? execApiVersion : undefined,
+              execApiVersion: authMethod === "exec" ? execApiVersion.trim() || undefined : undefined,
             },
     };
   }

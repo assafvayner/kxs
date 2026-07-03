@@ -6,14 +6,16 @@
 
   // undefined = list view; null = create form; string = edit form for that name
   let editing = $state<string | null | undefined>(undefined);
+  let confirmingDelete = $state<string | null>(null);
 
   async function remove(name: string) {
-    if (!confirm(`Delete context "${name}"? The cluster and user entries are kept.`)) return;
     try {
       await api.deleteContext(name);
       await contexts.refresh();
     } catch (e) {
       contexts.error = String(e);
+    } finally {
+      confirmingDelete = null;
     }
   }
 </script>
@@ -36,7 +38,7 @@
       <div class="error">{contexts.error}</div>
     {/if}
     {#each contexts.view.warnings as w}
-      <div class="error">{w}</div>
+      <div class="warning">{w}</div>
     {/each}
 
     {#if contexts.view.contexts.length === 0}
@@ -51,7 +53,17 @@
         </thead>
         <tbody>
           {#each contexts.view.contexts as ctx (ctx.name)}
-            <tr class="clickable" onclick={() => tabs.open(ctx.name)}>
+            <tr
+              class="clickable"
+              onclick={() => tabs.open(ctx.name)}
+              tabindex="0"
+              onkeydown={(e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  tabs.open(ctx.name);
+                }
+              }}>
               <td>{ctx.name === contexts.view.currentContext ? "★" : ""}</td>
               <td><strong>{ctx.name}</strong></td>
               <td>{ctx.cluster}</td>
@@ -59,17 +71,32 @@
               <td>{ctx.namespace ?? "—"}</td>
               <td class="mono dim">{ctx.source}</td>
               <td class="actions">
-                <button
-                  onclick={(e) => {
-                    e.stopPropagation();
-                    editing = ctx.name;
-                  }}>Edit</button>
-                <button
-                  class="danger"
-                  onclick={(e) => {
-                    e.stopPropagation();
-                    remove(ctx.name);
-                  }}>Delete</button>
+                {#if confirmingDelete === ctx.name}
+                  <button
+                    class="danger"
+                    title="Removes only the context entry; cluster and user entries are kept"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      remove(ctx.name);
+                    }}>Confirm delete</button>
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      confirmingDelete = null;
+                    }}>Keep</button>
+                {:else}
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      editing = ctx.name;
+                    }}>Edit</button>
+                  <button
+                    class="danger"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      confirmingDelete = ctx.name;
+                    }}>Delete</button>
+                {/if}
               </td>
             </tr>
           {/each}

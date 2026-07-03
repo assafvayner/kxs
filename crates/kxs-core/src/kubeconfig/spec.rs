@@ -144,6 +144,11 @@ pub fn apply_context_spec(store: &mut KubeconfigStore, spec: ContextSpec) -> Res
     let user_name = match (&spec.user.existing, &spec.user.name) {
         (Some(existing), _) => existing.clone(),
         (None, Some(new_name)) => {
+            let prev_exec_extras = store
+                .find_user(new_name)
+                .and_then(|(_, u)| u.user.exec.as_ref())
+                .map(|e| e.extras.clone())
+                .unwrap_or_default();
             let exec = spec.user.exec_command.as_ref().map(|cmd| ExecConfig {
                 api_version: spec
                     .user
@@ -162,7 +167,7 @@ pub fn apply_context_spec(store: &mut KubeconfigStore, spec: ContextSpec) -> Res
                         })
                         .collect()
                 }),
-                extras: Extras::new(),
+                extras: prev_exec_extras,
             });
             let user = AuthInfo {
                 token: spec.user.token.clone(),
@@ -352,5 +357,39 @@ contexts: [{name: prod, context: {cluster: prod, user: u1}}]
             Some("Q0VSVA==")
         );
         assert_eq!(user.user.client_key_data.as_deref(), Some("S0VZ"));
+    }
+
+    #[test]
+    fn edit_preserves_exec_extras() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config");
+        std::fs::write(
+            &p,
+            r#"
+clusters: [{name: prod, cluster: {server: "https://a"}}]
+users:
+  - name: eks-u
+    user:
+      exec:
+        apiVersion: client.authentication.k8s.io/v1beta1
+        command: aws
+        provideClusterInfo: true
+contexts: [{name: prod, context: {cluster: prod, user: eks-u}}]
+"#,
+        )
+        .unwrap();
+        let mut store = KubeconfigStore::load(vec![p.clone()]).unwrap();
+        let spec: ContextSpec = serde_json::from_str(
+            r#"{"name":"prod","originalName":"prod",
+                "cluster":{"existing":"prod"},
+                "user":{"name":"eks-u","execCommand":"aws","execArgs":["eks","get-token"]}}"#,
+        )
+        .unwrap();
+        apply_context_spec(&mut store, spec).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            text.contains("provideClusterInfo"),
+            "exec extras lost: {text}"
+        );
     }
 }
