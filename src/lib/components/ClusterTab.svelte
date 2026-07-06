@@ -146,6 +146,11 @@
     }
   }
 
+  function activate(key: string) {
+    s.selected = key;
+    openDetail("yaml");
+  }
+
   async function openDetail(kind: "yaml" | "describe") {
     const sel = parseSelected();
     if (!sel) return;
@@ -389,6 +394,7 @@
               role="button"
               tabindex="0"
               onclick={() => (s.selected = pod.key)}
+              ondblclick={() => activate(pod.key)}
               onkeydown={(e) => {
                 if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
                   e.preventDefault();
@@ -408,7 +414,11 @@
         </VirtualList>
       </div>
     {:else if s.views.top.kind === "resource"}
-      <ResourceTableView {tabId} session={s} resourceKind={s.views.top.resourceKind} />
+      <ResourceTableView
+        {tabId}
+        session={s}
+        resourceKind={s.views.top.resourceKind}
+        onactivate={activate} />
     {:else if s.views.top.kind === "yaml"}
       <YamlView title={s.views.top.title} body={s.views.top.body} session={s} />
     {:else if s.views.top.kind === "yamlEdit"}

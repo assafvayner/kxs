@@ -7,8 +7,17 @@
   import { matchRow } from "../command";
   import VirtualList from "./VirtualList.svelte";
 
-  let { tabId, session, resourceKind }: { tabId: number; session: TabSession; resourceKind: ResourceKind } =
-    $props();
+  let {
+    tabId,
+    session,
+    resourceKind,
+    onactivate,
+  }: {
+    tabId: number;
+    session: TabSession;
+    resourceKind: ResourceKind;
+    onactivate: (key: string) => void;
+  } = $props();
 
   let columns = $state<string[]>([]);
   let rows = $state<ResourceRow[]>([]);
@@ -60,6 +69,7 @@
           role="button"
           tabindex="0"
           onclick={() => (session.selected = r.key)}
+          ondblclick={() => onactivate(r.key)}
           onkeydown={(e) => {
             if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
               e.preventDefault();
