@@ -177,6 +177,8 @@ export const api = {
     invoke<void>("stop_logs", { tabId, streamId }),
   listResourceKinds: (tabId: number) =>
     invoke<ResourceKind[]>("list_resource_kinds", { tabId }),
+  listPresentKinds: (tabId: number, namespace: string | null, kinds: ResourceKind[]) =>
+    invoke<string[]>("list_present_kinds", { tabId, namespace, kinds }),
   listResourceTable: (
     tabId: number,
     group: string,

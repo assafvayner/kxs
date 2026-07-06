@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { TabSession } from "../stores/sessions.svelte";
   import type { ResourceKind } from "../api";
-  import { fuzzyKinds } from "../command";
+  import { fuzzyKinds, visibleKinds } from "../command";
 
   let { session, label, onpick }: {
     session: TabSession;
@@ -13,7 +13,9 @@
   let text = $state("");
   let input: HTMLInputElement | undefined = $state();
   let root: HTMLElement | undefined = $state();
-  const matches = $derived(open ? fuzzyKinds(session.kinds, text).slice(0, 12) : []);
+  const matches = $derived(
+    open ? fuzzyKinds(visibleKinds(session.kinds, session.presentKinds), text).slice(0, 12) : [],
+  );
 
   $effect(() => {
     if (open) input?.focus();

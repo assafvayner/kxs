@@ -60,7 +60,10 @@
         .catch(() => {});
       api
         .listResourceKinds(tabId)
-        .then((k) => (s.kinds = k))
+        .then((k) => {
+          s.kinds = k;
+          refreshPresentKinds();
+        })
         .catch(() => {});
       await startWatch();
     } catch (e) {
@@ -87,8 +90,20 @@
     }
   }
 
+  async function refreshPresentKinds() {
+    const kinds = s.kinds;
+    if (!kinds.length) return;
+    try {
+      const keys = await api.listPresentKinds(tabId, s.namespace, kinds);
+      s.presentKinds = new Set(keys);
+    } catch {
+      // leave the existing set (or null) in place → picker keeps showing the prior/all kinds
+    }
+  }
+
   function onNamespaceChange() {
     startWatch();
+    refreshPresentKinds();
   }
 
   const POD_KIND: ResourceKind = {

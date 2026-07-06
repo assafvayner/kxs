@@ -223,6 +223,20 @@ pub async fn list_resource_kinds(
 }
 
 #[tauri::command]
+pub async fn list_present_kinds(
+    tab_id: u32,
+    namespace: Option<String>,
+    kinds: Vec<kxs_cluster::resources::KindProbe>,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<String>, String> {
+    let session = session_of(&sessions, tab_id).await?;
+    Ok(
+        kxs_cluster::resources::present_kinds(session.client.clone(), namespace.as_deref(), kinds)
+            .await,
+    )
+}
+
+#[tauri::command]
 pub async fn list_resource_table(
     tab_id: u32,
     group: String,

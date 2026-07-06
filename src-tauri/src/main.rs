@@ -2,12 +2,17 @@
 
 mod cluster_ipc;
 mod ipc;
+mod shell_env;
 mod watcher;
 
 use kxs_core::kubeconfig::paths::kubeconfig_paths;
 use kxs_core::kubeconfig::store::KubeconfigStore;
 
 fn main() {
+    // Restore the user's real PATH before anything spawns exec-auth helpers
+    // (EKS `aws eks get-token`, gke-gcloud-auth-plugin, kubelogin, ...).
+    shell_env::augment_path();
+
     let paths = kubeconfig_paths();
     let (store, warnings) = KubeconfigStore::load_tolerant(paths.clone());
     for w in &warnings {
@@ -33,6 +38,7 @@ fn main() {
             cluster_ipc::stream_logs,
             cluster_ipc::stop_logs,
             cluster_ipc::list_resource_kinds,
+            cluster_ipc::list_present_kinds,
             cluster_ipc::list_resource_table,
             cluster_ipc::get_resource_yaml,
             cluster_ipc::get_resource_events,

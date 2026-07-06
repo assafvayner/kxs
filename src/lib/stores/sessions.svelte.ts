@@ -16,6 +16,8 @@ export class TabSession {
   pods = new PodTable();
   views = new ViewStack();
   kinds = $state<ResourceKind[]>([]);
+  /** "{group}/{kind}" keys with >=1 instance in the current namespace; null = not yet probed → picker shows all. */
+  presentKinds = $state<Set<string> | null>(null);
   filter = $state("");
   selected = $state<string | null>(null);
 }

@@ -1,4 +1,5 @@
-use kube::api::{Api, DynamicObject};
+use futures::StreamExt;
+use kube::api::{Api, DynamicObject, ListParams};
 use kube::core::{ApiResource, GroupVersionKind};
 use kube::Client;
 use serde::{Deserialize, Serialize};
@@ -211,6 +212,44 @@ pub async fn get_events(client: Client, namespace: Option<&str>, name: &str) -> 
         .collect()
 }
 
+/// A kind to probe for existence, supplied by the frontend from discovery.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KindProbe {
+    pub group: String,
+    pub version: String,
+    pub kind: String,
+    pub plural: String,
+}
+
+/// Keys ("{group}/{kind}") of the given kinds that have >=1 instance in `namespace`.
+/// `namespace: None` = all namespaces. Per-kind errors (e.g. RBAC 403) count as absent.
+pub async fn present_kinds(
+    client: Client,
+    namespace: Option<&str>,
+    probes: Vec<KindProbe>,
+) -> Vec<String> {
+    futures::stream::iter(probes)
+        .map(|p| {
+            let client = client.clone();
+            async move {
+                let ar = api_resource(&p.group, &p.version, &p.kind, &p.plural);
+                let api: Api<DynamicObject> = match namespace {
+                    Some(ns) if !ns.is_empty() => Api::namespaced_with(client, ns, &ar),
+                    _ => Api::all_with(client, &ar),
+                };
+                match api.list(&ListParams::default().limit(1)).await {
+                    Ok(list) if !list.items.is_empty() => Some(format!("{}/{}", p.group, p.kind)),
+                    _ => None,
+                }
+            }
+        })
+        .buffer_unordered(16)
+        .filter_map(|k| async move { k })
+        .collect()
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +376,33 @@ mod tests {
         .unwrap();
         assert!(y.contains("kind: Namespace"));
         assert!(y.contains("name: default"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn present_kinds_reflects_namespace_contents_on_kind_local() {
+        let session = kind_session().await;
+        let probes = vec![
+            KindProbe {
+                group: String::new(),
+                version: "v1".into(),
+                kind: "Pod".into(),
+                plural: "pods".into(),
+            },
+            KindProbe {
+                group: "batch".into(),
+                version: "v1".into(),
+                kind: "CronJob".into(),
+                plural: "cronjobs".into(),
+            },
+        ];
+        // kube-system always has pods and no cronjobs.
+        let keys = super::present_kinds(session.client.clone(), Some("kube-system"), probes).await;
+        assert!(keys.contains(&"/Pod".to_string()), "expected Pod: {keys:?}");
+        assert!(
+            !keys.contains(&"batch/CronJob".to_string()),
+            "unexpected CronJob: {keys:?}"
+        );
     }
 
     async fn kind_session() -> crate::session::ClusterSession {

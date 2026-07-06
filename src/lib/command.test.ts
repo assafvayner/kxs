@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveKind, matchRow, fuzzyKinds } from "./command";
+import { resolveKind, matchRow, fuzzyKinds, visibleKinds } from "./command";
 import { currentKindLabel } from "./command";
 import { searchEnabled } from "./command";
 import type { ResourceKind } from "./api";
@@ -30,6 +30,28 @@ describe("fuzzyKinds", () => {
   });
   it("empty query returns all", () => {
     expect(fuzzyKinds(kinds, "").length).toBe(3);
+  });
+});
+
+describe("visibleKinds", () => {
+  const node: ResourceKind = {
+    group: "", version: "v1", kind: "Node", plural: "nodes", namespaced: false, aliases: ["no"],
+  };
+  const all = [...kinds, node];
+
+  it("returns all kinds when not yet probed (null)", () => {
+    expect(visibleKinds(all, null)).toEqual(all);
+  });
+
+  it("keeps only namespaced kinds present in the set", () => {
+    const present = new Set(["/Pod"]);
+    const r = visibleKinds(kinds, present);
+    expect(r.map((k) => k.kind)).toEqual(["Pod"]);
+  });
+
+  it("always keeps cluster-scoped kinds regardless of the set", () => {
+    const r = visibleKinds(all, new Set<string>());
+    expect(r.map((k) => k.kind)).toEqual(["Node"]);
   });
 });
 

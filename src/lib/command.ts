@@ -7,6 +7,12 @@ export function resolveKind(kinds: ResourceKind[], query: string): ResourceKind 
   return kinds.find((k) => k.aliases.includes(q) || k.kind.toLowerCase() === q || k.plural === q) ?? null;
 }
 
+/** Kinds visible in the picker: all when unprobed; else cluster-scoped + present namespaced. */
+export function visibleKinds(kinds: ResourceKind[], present: Set<string> | null): ResourceKind[] {
+  if (present === null) return kinds;
+  return kinds.filter((k) => !k.namespaced || present.has(k.group + "/" + k.kind));
+}
+
 export function fuzzyKinds(kinds: ResourceKind[], query: string): ResourceKind[] {
   const q = query.trim().toLowerCase();
   if (!q) return kinds;
