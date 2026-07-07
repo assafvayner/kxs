@@ -15,6 +15,9 @@
   let seq = 0;
   const CAP = 10000;
 
+  let body = $state<HTMLElement | undefined>(undefined);
+  let scrolledToEnd = false;
+
   async function start() {
     const mySeq = ++seq;
     if (streamId !== undefined) {
@@ -22,6 +25,7 @@
       streamId = undefined;
     }
     lines = [];
+    scrolledToEnd = false;
     try {
       const id = await api.streamLogs(
         tabId,
@@ -60,6 +64,13 @@
   });
 
   const visible = $derived(session.filter ? lines.filter((l) => matchRow(l, session.filter)) : lines);
+
+  // Jump to the newest log line once the first batch renders.
+  $effect(() => {
+    if (scrolledToEnd || visible.length === 0 || !body) return;
+    scrolledToEnd = true;
+    requestAnimationFrame(() => body && (body.scrollTop = body.scrollHeight));
+  });
 </script>
 
 <div class="detail">
@@ -73,5 +84,5 @@
     <span class="dim">{visible.length}/{lines.length}</span>
   </div>
   {#if error}<div class="connect-error"><pre class="mono">{error}</pre></div>{/if}
-  <pre class="detail-body logs mono" class:nowrap={!wrap}>{visible.join("\n")}</pre>
+  <pre bind:this={body} class="detail-body logs mono" class:nowrap={!wrap}>{visible.join("\n")}</pre>
 </div>
