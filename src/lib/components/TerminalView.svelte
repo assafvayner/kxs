@@ -3,6 +3,8 @@
   import { Terminal } from "@xterm/xterm";
   import "@xterm/xterm/css/xterm.css";
   import { api } from "../api";
+  import { settings } from "../stores/settings.svelte";
+  import { xtermTheme } from "../themes";
 
   let { tabId, namespace, pod, container }: {
     tabId: number;
@@ -16,6 +18,12 @@
   let execId: number | undefined;
   let closed = $state(false);
   let destroyed = false;
+
+  // xterm paints to canvas and can't read CSS vars; push theme changes to it
+  $effect(() => {
+    const th = xtermTheme(settings.effectiveTheme);
+    if (term) term.options.theme = th;
+  });
 
   // Kept across output batches so a multi-byte UTF-8 codepoint split across
   // two channel messages decodes correctly instead of emitting U+FFFD.
@@ -38,7 +46,7 @@
       fontFamily: "ui-monospace, monospace",
       fontSize: 12,
       cursorBlink: true,
-      theme: { background: "#16161e", foreground: "#c0caf5" },
+      theme: xtermTheme(settings.effectiveTheme),
     });
     term.open(el!);
     const cols = term.cols,

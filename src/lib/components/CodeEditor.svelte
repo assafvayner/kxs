@@ -7,7 +7,9 @@
   import type { K8sOptions } from "../editor/k8s";
   import { matchingLines, setFilter } from "../editor/filterHighlight";
   import { buildExtensions, defineExCommands } from "../editor/setup";
+  import { editorThemeDark, editorThemeLight } from "../editor/theme";
   import { setExCommands, type ExCommands } from "../editor/vimEx";
+  import { settings } from "../stores/settings.svelte";
 
   let {
     value = $bindable(""),
@@ -39,6 +41,8 @@
   let view: EditorView | undefined;
   const vimCompartment = new Compartment();
   const escapeCompartment = new Compartment();
+  const themeCompartment = new Compartment();
+  let lastDark = settings.effectiveTheme.dark;
 
   // Deliberate policy: with vim on, paste is insert-mode only (no implicit mode switch).
   // The vim keymap's own bubble-phase paste listener would flip to insert mode, so this
@@ -95,6 +99,7 @@
         extensions: [
           vimCompartment.of(vimExtension(vimOn)),
           escapeCompartment.of(escapeExtension(vimOn)),
+          themeCompartment.of(settings.effectiveTheme.dark ? editorThemeDark : editorThemeLight),
           buildExtensions({
             readOnly,
             k8s,
@@ -150,6 +155,14 @@
   $effect(() => {
     const c = commands;
     if (view) setExCommands(view, c ?? null);
+  });
+
+  $effect(() => {
+    const dark = settings.effectiveTheme.dark;
+    if (view && dark !== lastDark) {
+      lastDark = dark;
+      view.dispatch({ effects: themeCompartment.reconfigure(dark ? editorThemeDark : editorThemeLight) });
+    }
   });
 </script>
 

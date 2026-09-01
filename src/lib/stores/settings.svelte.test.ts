@@ -43,4 +43,56 @@ describe("SettingsStore", () => {
     localStorage.setItem("kxs.settings", JSON.stringify({ vimMode: "yes" }));
     expect(new SettingsStore().vimMode).toBe(false);
   });
+
+  it("defaults theme to tokyo-night", () => {
+    expect(new SettingsStore().theme).toBe("tokyo-night");
+  });
+
+  it("persists and reloads the theme", () => {
+    const s = new SettingsStore();
+    s.setTheme("nord");
+    expect(s.theme).toBe("nord");
+    expect(JSON.parse(localStorage.getItem("kxs.settings")!).theme).toBe("nord");
+    expect(new SettingsStore().theme).toBe("nord");
+  });
+
+  it("falls back to default on an unknown stored theme id", () => {
+    localStorage.setItem("kxs.settings", JSON.stringify({ theme: "not-a-theme" }));
+    expect(new SettingsStore().theme).toBe("tokyo-night");
+  });
+
+  it("setTheme ignores unknown ids", () => {
+    const s = new SettingsStore();
+    s.setTheme("bogus");
+    expect(s.theme).toBe("tokyo-night");
+  });
+
+  it("keeps vimMode when saving theme and vice versa", () => {
+    const s = new SettingsStore();
+    s.setVimMode(true);
+    s.setTheme("dracula");
+    const raw = JSON.parse(localStorage.getItem("kxs.settings")!);
+    expect(raw).toEqual({ vimMode: true, theme: "dracula" });
+  });
+
+  it("preview overrides effective theme; commit and revert clear it", () => {
+    const s = new SettingsStore();
+    expect(s.effectiveTheme.id).toBe("tokyo-night");
+    s.setPreviewTheme("nord");
+    expect(s.effectiveTheme.id).toBe("nord");
+    expect(s.theme).toBe("tokyo-night"); // not committed
+    s.setPreviewTheme(null); // revert (mouse leave / Esc)
+    expect(s.effectiveTheme.id).toBe("tokyo-night");
+    s.setPreviewTheme("dracula");
+    s.setTheme("dracula"); // commit clears preview
+    expect(s.previewTheme).toBeNull();
+    expect(s.effectiveTheme.id).toBe("dracula");
+  });
+
+  it("previewing a theme does not touch storage", () => {
+    const s = new SettingsStore();
+    s.setTheme("nord");
+    s.setPreviewTheme("dracula");
+    expect(JSON.parse(localStorage.getItem("kxs.settings")!)).toEqual({ vimMode: false, theme: "nord" });
+  });
 });

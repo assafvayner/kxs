@@ -7,8 +7,10 @@
   import SettingsView from "./lib/components/SettingsView.svelte";
   import { tabs } from "./lib/stores/tabs.svelte";
   import { contexts } from "./lib/stores/contexts.svelte";
+  import { settings } from "./lib/stores/settings.svelte";
   import { handleKeydown, isEditableTarget } from "./lib/keys";
   import { clusterKeyHandlers } from "./lib/clusterKeys";
+  import { applyTheme } from "./lib/themes";
 
   onMount(() => {
     contexts.refresh();
@@ -25,6 +27,9 @@
     if (typeof tabs.activeId === "number" && clusterKeyHandlers.get(tabs.activeId)?.(e)) return;
     handleKeydown(e, tabs);
   }
+
+  // re-applies whenever the committed theme or a picker preview changes
+  $effect(() => applyTheme(settings.effectiveTheme));
 </script>
 
 <svelte:window onkeydown={onKeydown} />

@@ -15,7 +15,7 @@ import {
 import { Vim } from "@replit/codemirror-vim";
 import { filterHighlight } from "./filterHighlight";
 import { k8sExtensions, type K8sOptions } from "./k8s";
-import { editorTheme, yamlHighlight } from "./theme";
+import { yamlHighlight } from "./theme";
 import { EX_COMMANDS, runEx } from "./vimEx";
 
 let exDefined = false;
@@ -37,7 +37,7 @@ export interface EditorOptions {
   k8s?: K8sOptions;
 }
 
-/** Everything except the vim and Escape bindings, which the component swaps through compartments. */
+/** Everything except the vim, Escape, and theme extensions, which the component swaps through compartments. */
 export function buildExtensions(o: EditorOptions): Extension[] {
   const editing: Extension[] = o.readOnly
     ? []
@@ -51,7 +51,6 @@ export function buildExtensions(o: EditorOptions): Extension[] {
     indentUnit.of("  "),
     yaml(),
     syntaxHighlighting(yamlHighlight),
-    editorTheme,
     filterHighlight,
     search({ top: true }),
     keymap.of([...searchKeymap, ...defaultKeymap]),
