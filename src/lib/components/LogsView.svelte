@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { onDestroy, onMount, untrack } from "svelte";
+  import { onDestroy, onMount, tick, untrack } from "svelte";
   import { api } from "../api";
   import type { TabSession } from "../stores/sessions.svelte";
   import { matchRow } from "../command";
   import { copyText } from "../clipboard";
   import { SINCE_OPTIONS, defaultTail, logWindow, tailOptions } from "../logOptions";
+  import { nextFollowing } from "../follow";
   let {
     tabId,
     namespace,
@@ -38,11 +39,36 @@
 
   let body = $state<HTMLElement | undefined>(undefined);
   // Sticky-bottom: keep following the tail while the user is at (or near) the
-  // end; scrolling up detaches, scrolling back down re-attaches.
-  let atBottom = true;
+  // end; scrolling up detaches, scrolling back down near the bottom re-attaches.
+  let following = $state(true);
+  // Set right before a programmatic scrollTop write so the resulting native
+  // "scroll" event isn't misread as the user scrolling away; cleared on the
+  // next frame regardless of whether that write actually fired an event.
+  let ignoreNextScroll = false;
+
   function onBodyScroll() {
     if (!body) return;
-    atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 8;
+    following = nextFollowing(
+      following,
+      { scrollTop: body.scrollTop, clientHeight: body.clientHeight, scrollHeight: body.scrollHeight },
+      { programmatic: ignoreNextScroll },
+    );
+  }
+
+  async function scrollToBottom() {
+    await tick();
+    if (!body) return;
+    ignoreNextScroll = true;
+    body.scrollTop = body.scrollHeight;
+    requestAnimationFrame(() => (ignoreNextScroll = false));
+  }
+
+  function jumpToBottom() {
+    following = true;
+  }
+
+  function onWrapChange() {
+    if (following) scrollToBottom();
   }
 
   function stopAll() {
@@ -54,7 +80,7 @@
     const mySeq = ++seq;
     stopAll();
     lines = [];
-    atBottom = true;
+    following = true;
     // Interleaved by arrival; each pod's own lines stay in order.
     await Promise.all(
       pods.map(async (pod) => {
@@ -123,12 +149,11 @@
 
   const visible = $derived(session.filter ? lines.filter((l) => matchRow(l, session.filter)) : lines);
 
-  // Keep the view pinned to the newest line while the user hasn't scrolled up.
+  // Keep the view pinned to the newest line while following: on new lines,
+  // on re-attaching (scrolling back near the bottom, or the Follow button).
   $effect(() => {
-    if (visible.length === 0 || !body || !atBottom) return;
-    requestAnimationFrame(() => {
-      if (body && atBottom) body.scrollTop = body.scrollHeight;
-    });
+    if (visible.length === 0 || !body || !following) return;
+    scrollToBottom();
   });
 </script>
 
@@ -155,7 +180,10 @@
       <label class="chk"><input type="checkbox" bind:checked={previous} onchange={start} /> previous</label>
     {/if}
     <label class="chk"><input type="checkbox" bind:checked={timestamps} onchange={start} /> ts</label>
-    <label class="chk"><input type="checkbox" bind:checked={wrap} /> wrap</label>
+    <label class="chk"><input type="checkbox" bind:checked={wrap} onchange={onWrapChange} /> wrap</label>
+    {#if !following}
+      <button onclick={jumpToBottom} title="Scroll to the newest line and resume following">Follow ↓</button>
+    {/if}
     <button onclick={copyVisible}>{copied ? "Copied!" : "Copy"}</button>
     <span class="dim">{visible.length}/{lines.length}</span>
   </div>
