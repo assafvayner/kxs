@@ -1,5 +1,5 @@
 use crate::resources::api_resource;
-use kube::api::{Api, DeleteParams, DynamicObject, Patch, PatchParams};
+use kube::api::{Api, DeleteParams, DynamicObject, Patch, PatchParams, PropagationPolicy};
 use kube::Client;
 use serde_json::json;
 
@@ -107,6 +107,25 @@ pub async fn apply_yaml(
     Ok(())
 }
 
+/// DeleteParams for the given propagation policy name and force flag.
+/// `None`/empty propagation leaves the server's per-resource default in place;
+/// force means grace period 0 (kubectl's `--force` for stuck objects).
+pub fn delete_params(propagation: Option<&str>, force: bool) -> Result<DeleteParams, String> {
+    let mut dp = DeleteParams::default();
+    match propagation.map(str::trim) {
+        None | Some("") => {}
+        Some("Background") => dp.propagation_policy = Some(PropagationPolicy::Background),
+        Some("Foreground") => dp.propagation_policy = Some(PropagationPolicy::Foreground),
+        Some("Orphan") => dp.propagation_policy = Some(PropagationPolicy::Orphan),
+        Some(other) => return Err(format!("unknown propagation policy: {other}")),
+    }
+    if force {
+        dp.grace_period_seconds = Some(0);
+    }
+    Ok(dp)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn delete_resource(
     client: Client,
     group: &str,
@@ -115,12 +134,13 @@ pub async fn delete_resource(
     plural: &str,
     namespace: Option<&str>,
     name: &str,
+    propagation: Option<&str>,
+    force: bool,
 ) -> Result<(), String> {
+    let dp = delete_params(propagation, force)?;
     let ar = api_resource(group, version, kind, plural);
     let api = dyn_api(client, &ar, namespace);
-    api.delete(name, &DeleteParams::default())
-        .await
-        .map_err(|e| e.to_string())?;
+    api.delete(name, &dp).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -219,6 +239,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn delete_params_default_is_untouched() {
+        assert_eq!(delete_params(None, false).unwrap(), DeleteParams::default());
+        assert_eq!(
+            delete_params(Some(""), false).unwrap(),
+            DeleteParams::default()
+        );
+    }
+
+    #[test]
+    fn delete_params_maps_propagation() {
+        for (name, want) in [
+            ("Background", PropagationPolicy::Background),
+            ("Foreground", PropagationPolicy::Foreground),
+            ("Orphan", PropagationPolicy::Orphan),
+        ] {
+            let dp = delete_params(Some(name), false).unwrap();
+            assert_eq!(dp.propagation_policy, Some(want));
+            assert_eq!(dp.grace_period_seconds, None);
+        }
+    }
+
+    #[test]
+    fn delete_params_force_sets_zero_grace_period() {
+        let dp = delete_params(Some("Foreground"), true).unwrap();
+        assert_eq!(dp.grace_period_seconds, Some(0));
+        assert_eq!(dp.propagation_policy, Some(PropagationPolicy::Foreground));
+        assert_eq!(
+            delete_params(None, true).unwrap().grace_period_seconds,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn delete_params_rejects_unknown_propagation() {
+        assert!(delete_params(Some("background"), false).is_err());
+        assert!(delete_params(Some("nope"), false).is_err());
+    }
+
     async fn kind_session() -> crate::session::ClusterSession {
         let paths = kxs_core::kubeconfig::paths::kubeconfig_paths();
         let store = kxs_core::kubeconfig::store::KubeconfigStore::load(paths).unwrap();
@@ -306,6 +365,8 @@ mod tests {
             "configmaps",
             Some("kxs-e2e"),
             "kxs-t",
+            None,
+            false,
         )
         .await
         .unwrap();
@@ -318,6 +379,101 @@ mod tests {
             "namespaces",
             None,
             "kxs-e2e",
+            None,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn orphan_delete_leaves_dependents_behind() {
+        let s = kind_session().await;
+        let ns = "kxs-e2e-del";
+        let ns_yaml = format!("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {ns}\n");
+        apply_yaml(
+            s.client.clone(),
+            "",
+            "v1",
+            "Namespace",
+            "namespaces",
+            None,
+            ns,
+            &ns_yaml,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let dep = format!("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: kxs-orphan\n  namespace: {ns}\nspec:\n  replicas: 1\n  selector:\n    matchLabels: {{app: kxs-orphan}}\n  template:\n    metadata: {{labels: {{app: kxs-orphan}}}}\n    spec:\n      containers: [{{name: c, image: registry.k8s.io/pause:3.9}}]\n");
+        apply_yaml(
+            s.client.clone(),
+            "apps",
+            "v1",
+            "Deployment",
+            "deployments",
+            Some(ns),
+            "kxs-orphan",
+            &dep,
+            false,
+        )
+        .await
+        .unwrap();
+
+        // wait for the ReplicaSet the deployment owns to appear
+        let rs_api: Api<DynamicObject> = dyn_api(
+            s.client.clone(),
+            &api_resource("apps", "v1", "ReplicaSet", "replicasets"),
+            Some(ns),
+        );
+        let mut rs_name = None;
+        for _ in 0..60 {
+            let list = rs_api
+                .list(&kube::api::ListParams::default())
+                .await
+                .unwrap();
+            if let Some(rs) = list.items.into_iter().find(|r| {
+                r.metadata
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with("kxs-orphan-"))
+            }) {
+                rs_name = rs.metadata.name.clone();
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        let rs_name = rs_name.expect("deployment never produced a ReplicaSet");
+
+        delete_resource(
+            s.client.clone(),
+            "apps",
+            "v1",
+            "Deployment",
+            "deployments",
+            Some(ns),
+            "kxs-orphan",
+            Some("Orphan"),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // the orphaned ReplicaSet outlives its owner
+        let rs = rs_api.get(&rs_name).await.unwrap();
+        assert!(rs.metadata.owner_references.unwrap_or_default().is_empty());
+
+        // cleanup: namespace deletion reaps the orphan
+        let _ = delete_resource(
+            s.client.clone(),
+            "",
+            "v1",
+            "Namespace",
+            "namespaces",
+            None,
+            ns,
+            None,
+            false,
         )
         .await;
     }

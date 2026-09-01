@@ -12,24 +12,24 @@ function ids(k: ResourceKind): string[][] {
 
 describe("menuItemsFor", () => {
   it("gives every kind inspect actions and delete", () => {
-    expect(ids(kind("Ingress", "networking.k8s.io"))).toEqual([["describe", "yaml", "edit"], ["del"]]);
+    expect(ids(kind("Ingress", "networking.k8s.io"))).toEqual([["describe", "yaml", "edit", "copyName", "copyYaml"], ["del"]]);
   });
 
   it("adds pod-only actions for core Pods", () => {
     expect(ids(kind("Pod"))).toEqual([
-      ["describe", "yaml", "edit"],
+      ["describe", "yaml", "edit", "copyName", "copyYaml"],
       ["logs", "shell", "forward"],
       ["del"],
     ]);
   });
 
   it("does not treat non-core kinds named Pod as pods", () => {
-    expect(ids(kind("Pod", "metrics.k8s.io"))).toEqual([["describe", "yaml", "edit"], ["del"]]);
+    expect(ids(kind("Pod", "metrics.k8s.io"))).toEqual([["describe", "yaml", "edit", "copyName", "copyYaml"], ["del"]]);
   });
 
   it("gives Deployments the full workload set including rollout history", () => {
     expect(ids(kind("Deployment", "apps"))).toEqual([
-      ["describe", "yaml", "edit"],
+      ["describe", "yaml", "edit", "copyName", "copyYaml"],
       ["logsAll", "viewPods", "scale", "restart", "history"],
       ["del"],
     ]);
@@ -37,7 +37,7 @@ describe("menuItemsFor", () => {
 
   it("gives StatefulSets scale and restart but no history", () => {
     expect(ids(kind("StatefulSet", "apps"))).toEqual([
-      ["describe", "yaml", "edit"],
+      ["describe", "yaml", "edit", "copyName", "copyYaml"],
       ["logsAll", "viewPods", "scale", "restart"],
       ["del"],
     ]);
@@ -45,7 +45,7 @@ describe("menuItemsFor", () => {
 
   it("gives DaemonSets restart but not scale", () => {
     expect(ids(kind("DaemonSet", "apps"))).toEqual([
-      ["describe", "yaml", "edit"],
+      ["describe", "yaml", "edit", "copyName", "copyYaml"],
       ["logsAll", "viewPods", "restart"],
       ["del"],
     ]);
@@ -53,7 +53,7 @@ describe("menuItemsFor", () => {
 
   it("gives ReplicaSets scale but not restart", () => {
     expect(ids(kind("ReplicaSet", "apps"))).toEqual([
-      ["describe", "yaml", "edit"],
+      ["describe", "yaml", "edit", "copyName", "copyYaml"],
       ["logsAll", "viewPods", "scale"],
       ["del"],
     ]);
@@ -61,7 +61,7 @@ describe("menuItemsFor", () => {
 
   it("gives Jobs pod logs and view pods", () => {
     expect(ids(kind("Job", "batch"))).toEqual([
-      ["describe", "yaml", "edit"],
+      ["describe", "yaml", "edit", "copyName", "copyYaml"],
       ["logsAll", "viewPods"],
       ["del"],
     ]);
@@ -69,7 +69,7 @@ describe("menuItemsFor", () => {
 
   it("gives CronJobs trigger, suspend, resume, view pods", () => {
     expect(ids(kind("CronJob", "batch"))).toEqual([
-      ["describe", "yaml", "edit"],
+      ["describe", "yaml", "edit", "copyName", "copyYaml"],
       ["trigger", "suspend", "resume", "viewPods"],
       ["del"],
     ]);
@@ -77,7 +77,7 @@ describe("menuItemsFor", () => {
 
   it("gives Nodes cordon, uncordon, drain", () => {
     expect(ids(kind("Node"))).toEqual([
-      ["describe", "yaml", "edit"],
+      ["describe", "yaml", "edit", "copyName", "copyYaml"],
       ["cordon", "uncordon", "drain"],
       ["del"],
     ]);
@@ -85,7 +85,7 @@ describe("menuItemsFor", () => {
 
   it("gives core Services port-forward", () => {
     expect(ids(kind("Service"))).toEqual([
-      ["describe", "yaml", "edit"],
+      ["describe", "yaml", "edit", "copyName", "copyYaml"],
       ["forward"],
       ["del"],
     ]);
@@ -93,7 +93,7 @@ describe("menuItemsFor", () => {
 
   it("gives Secrets and ConfigMaps copy value", () => {
     for (const k of ["Secret", "ConfigMap"]) {
-      expect(ids(kind(k))).toEqual([["describe", "yaml", "edit"], ["values"], ["del"]]);
+      expect(ids(kind(k))).toEqual([["describe", "yaml", "edit", "copyName", "copyYaml"], ["values"], ["del"]]);
     }
   });
 

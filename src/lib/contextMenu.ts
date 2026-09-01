@@ -19,6 +19,8 @@ export type MenuActionId =
   | "describe"
   | "yaml"
   | "edit"
+  | "copyName"
+  | "copyYaml"
   | "logs"
   | "logsAll"
   | "shell"
@@ -53,6 +55,8 @@ export function menuItemsFor(k: ResourceKind): MenuItem[][] {
       { id: "describe", label: "Describe", key: "d" },
       { id: "yaml", label: "View YAML", key: "y" },
       { id: "edit", label: "Edit YAML", key: "e" },
+      { id: "copyName", label: "Copy name" },
+      { id: "copyYaml", label: "Copy YAML" },
     ],
   ];
 

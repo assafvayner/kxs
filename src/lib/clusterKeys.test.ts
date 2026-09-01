@@ -9,6 +9,8 @@ function actions(overrides: Partial<ClusterActions> = {}): ClusterActions {
     describe: vi.fn(),
     yaml: vi.fn(),
     edit: vi.fn(),
+    copyName: vi.fn(),
+    copyYaml: vi.fn(),
     logs: vi.fn(),
     logsAll: vi.fn(),
     enter: vi.fn(),

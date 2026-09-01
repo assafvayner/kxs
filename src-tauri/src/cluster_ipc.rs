@@ -348,6 +348,8 @@ pub async fn delete_resource(
     plural: String,
     namespace: Option<String>,
     name: String,
+    propagation: Option<String>,
+    force: Option<bool>,
     sessions: State<'_, Sessions>,
 ) -> Result<(), String> {
     let session = session_of(&sessions, tab_id).await?;
@@ -359,6 +361,8 @@ pub async fn delete_resource(
         &plural,
         namespace.as_deref(),
         &name,
+        propagation.as_deref(),
+        force.unwrap_or(false),
     )
     .await
 }

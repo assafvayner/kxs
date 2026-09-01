@@ -153,6 +153,8 @@ table.events td, table.events th { font-size: 12px; }
 .breadcrumb .sep { color: var(--fg-dim); }
 .confirmbar { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--border); background: #3b331c; color: var(--fg); }
 .confirmbar input { flex: 0 0 100px; }
+.confirmbar .del-opt { display: flex; align-items: center; gap: 4px; color: var(--fg-dim); }
+.confirmbar .del-opt input[type="checkbox"] { flex: 0 0 auto; }
 .terminal-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .term-host { flex: 1; min-height: 0; padding: 4px 8px; background: #16161e; overflow: hidden; }
 .tab.settings { margin-left: auto; font-size: 14px; padding: 4px 8px; }
