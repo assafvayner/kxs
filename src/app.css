@@ -90,6 +90,20 @@ tr.clickable:hover td { background: var(--bg-hover); }
   cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .col-head:hover { color: var(--fg); }
+/* one grid child per column: header text plus its drag handle */
+.col-cell { position: relative; display: flex; align-items: center; min-width: 0; }
+.col-resizer {
+  position: absolute; top: 0; right: -6px; width: 11px; height: 100%;
+  background: none; border: none; border-radius: 0; padding: 0;
+  cursor: col-resize; touch-action: none;
+}
+.col-resizer:hover { background: none; border: none; }
+.col-resizer::after {
+  content: ""; position: absolute; top: 3px; bottom: 3px; left: 5px; width: 1px; background: var(--border);
+}
+.col-resizer:hover::after { background: var(--accent); }
+body.col-resizing { user-select: none; }
+body.col-resizing, body.col-resizing * { cursor: col-resize; }
 .pod-head {
   color: var(--fg-dim); font-size: 11px; font-weight: 600; text-transform: uppercase;
   border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg);
