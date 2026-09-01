@@ -65,6 +65,10 @@ pub fn cordon_patch(unschedulable: bool) -> serde_json::Value {
     json!({ "spec": { "unschedulable": unschedulable } })
 }
 
+pub fn suspend_patch(suspend: bool) -> serde_json::Value {
+    json!({ "spec": { "suspend": suspend } })
+}
+
 fn dyn_api(
     client: Client,
     ar: &kube::core::ApiResource,
@@ -192,6 +196,14 @@ mod tests {
         assert_eq!(
             ann["kubectl.kubernetes.io/restartedAt"],
             "2026-07-03T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn suspend_patch_shape() {
+        assert_eq!(
+            suspend_patch(true),
+            serde_json::json!({"spec": {"suspend": true}})
         );
     }
 

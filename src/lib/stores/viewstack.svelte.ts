@@ -6,10 +6,12 @@ export type View =
   | { kind: "yaml"; title: string; body: string }
   | { kind: "yamlEdit"; title: string; body: string; resourceKind: ResourceKind; namespace: string | null; name: string }
   | { kind: "describe"; title: string; resourceKind: ResourceKind; namespace: string | null; name: string; body: string }
-  | { kind: "logs"; namespace: string; pod: string }
+  | { kind: "logs"; namespace: string; pods: string[]; label: string }
   | { kind: "exec"; namespace: string; pod: string; container: string | null }
   | { kind: "forwards" }
-  | { kind: "metrics" };
+  | { kind: "metrics" }
+  | { kind: "rollout"; namespace: string; name: string }
+  | { kind: "values"; title: string; resourceKind: ResourceKind; namespace: string; name: string };
 
 export class ViewStack {
   stack = $state<View[]>([{ kind: "pods" }]);

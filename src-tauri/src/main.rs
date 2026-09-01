@@ -52,8 +52,16 @@ fn main() {
             cluster_ipc::exec_resize,
             cluster_ipc::stop_exec,
             cluster_ipc::start_forward,
+            cluster_ipc::forward_service,
             cluster_ipc::stop_forward,
             cluster_ipc::list_forwards,
+            cluster_ipc::list_workload_pods,
+            cluster_ipc::rollout_history,
+            cluster_ipc::rollout_undo,
+            cluster_ipc::drain_node,
+            cluster_ipc::trigger_cronjob,
+            cluster_ipc::suspend_cronjob,
+            cluster_ipc::get_config_values,
             cluster_ipc::pod_metrics
         ])
         .setup(move |app| {

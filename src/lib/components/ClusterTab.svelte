@@ -13,7 +13,17 @@
     type ClusterActions,
   } from "../clusterKeys";
   import { currentKindLabel, searchEnabled, matchRow } from "../command";
+  import {
+    menuItemsFor,
+    SCALABLE_KINDS,
+    RESTARTABLE_KINDS,
+    POD_OWNER_KINDS,
+    VIEW_PODS_KINDS,
+    type MenuActionId,
+    type MenuItem,
+  } from "../contextMenu";
   import VirtualList from "./VirtualList.svelte";
+  import ContextMenu from "./ContextMenu.svelte";
   import CommandBar from "./CommandBar.svelte";
   import ConfirmBar from "./ConfirmBar.svelte";
   import ResourcePicker from "./ResourcePicker.svelte";
@@ -26,6 +36,8 @@
   import TerminalView from "./TerminalView.svelte";
   import ForwardsView from "./ForwardsView.svelte";
   import MetricsView from "./MetricsView.svelte";
+  import RolloutView from "./RolloutView.svelte";
+  import ValuesView from "./ValuesView.svelte";
 
   let { context, tabId }: { context: string; tabId: number } = $props();
 
@@ -43,9 +55,8 @@
   }>(null);
   let searchBar: { focus: () => void } | undefined = $state();
   let actionError = $state<string | null>(null);
-
-  const SCALABLE_KINDS = ["Deployment", "StatefulSet", "ReplicaSet", "ReplicationController"];
-  const RESTARTABLE_KINDS = ["Deployment", "StatefulSet", "DaemonSet"];
+  let notice = $state<string | null>(null);
+  let menu = $state<null | { x: number; y: number; groups: MenuItem[][] }>(null);
 
   async function connect() {
     s.status = "connecting";
@@ -145,15 +156,18 @@
 
   function pushView(v: View) {
     s.selected = null;
+    menu = null;
     s.views.push(v);
   }
   function popView() {
     s.selected = null;
+    menu = null;
     s.views.pop();
   }
   function popTo(i: number) {
     while (s.views.depth > i + 1) s.views.pop();
     s.selected = null;
+    menu = null;
   }
 
   function viewLabel(v: View): string {
@@ -167,13 +181,17 @@
       case "describe":
         return v.title;
       case "logs":
-        return `logs: ${v.pod}`;
+        return `logs: ${v.label}`;
       case "exec":
         return `exec: ${v.pod}`;
       case "forwards":
         return "port-forwards";
       case "metrics":
         return "metrics";
+      case "rollout":
+        return `rollout: ${v.name}`;
+      case "values":
+        return v.title;
     }
   }
 
@@ -224,6 +242,49 @@
     }
   }
 
+  function openRowMenu(key: string, e: MouseEvent) {
+    e.preventDefault();
+    s.selected = key;
+    menu = { x: e.clientX, y: e.clientY, groups: menuItemsFor(currentKind()) };
+  }
+
+  function onMenuPick(id: MenuActionId) {
+    menu = null;
+    actions[id]();
+  }
+
+  function setCronjobSuspend(suspend: boolean) {
+    const k = currentKind();
+    const sel = parseSelected();
+    if (!sel || sel.namespace === null) return;
+    if (k.kind !== "CronJob") {
+      actionError = `${suspend ? "suspend" : "resume"} not supported for ${k.kind}`;
+      return;
+    }
+    confirm = {
+      message: `${suspend ? "Suspend" : "Resume"} ${sel.name}?`,
+      kind: "confirm",
+      run: async () => {
+        await api.suspendCronjob(tabId, sel.namespace!, sel.name, suspend);
+        notice = `${suspend ? "suspended" : "resumed"} CronJob ${sel.name}`;
+      },
+    };
+  }
+
+  function requestRolloutUndo(revision: number) {
+    const top = s.views.top;
+    if (top.kind !== "rollout") return;
+    const { namespace, name } = top;
+    confirm = {
+      message: `Roll back ${name} to revision ${revision}?`,
+      kind: "confirm",
+      run: async () => {
+        await api.rolloutUndo(tabId, namespace, name, revision);
+        notice = `rolled ${name} back to revision ${revision}`;
+      },
+    };
+  }
+
   const actions: ClusterActions = {
     openCommand: () => (bar = "command"),
     focusSearch: () => searchBar?.focus(),
@@ -236,10 +297,34 @@
     edit: () => openEdit(),
     logs: () => {
       const k = currentKind();
+      if (POD_OWNER_KINDS.includes(k.kind)) {
+        actions.logsAll();
+        return;
+      }
       if (k.kind !== "Pod" || k.group !== "") return;
       const sel = parseSelected();
       if (!sel || sel.namespace === null) return;
-      pushView({ kind: "logs", namespace: sel.namespace, pod: sel.name });
+      pushView({ kind: "logs", namespace: sel.namespace, pods: [sel.name], label: sel.name });
+    },
+    logsAll: async () => {
+      const k = currentKind();
+      const sel = parseSelected();
+      if (!sel || sel.namespace === null) return;
+      if (!POD_OWNER_KINDS.includes(k.kind)) {
+        actionError = `logs not supported for ${k.kind}`;
+        return;
+      }
+      const namespace = sel.namespace;
+      try {
+        const pods = await api.listWorkloadPods(tabId, k, namespace, sel.name);
+        if (pods.length === 0) {
+          actionError = `no pods match ${k.kind} ${sel.name}'s selector`;
+          return;
+        }
+        pushView({ kind: "logs", namespace, pods, label: `${sel.name} (${pods.length} pods)` });
+      } catch (e) {
+        actionError = String(e);
+      }
     },
     enter: () => openDetail("describe"),
     del: () => {
@@ -322,20 +407,104 @@
     },
     forward: () => {
       const k = currentKind();
-      if (k.kind !== "Pod" || k.group !== "") {
-        actionError = `port-forward not supported for ${k.kind}`;
-        return;
-      }
       const sel = parseSelected();
       if (!sel || sel.namespace === null) return;
+      if (k.kind === "Pod" && k.group === "") {
+        confirm = {
+          message: "Forward pod port",
+          kind: "number",
+          run: async (port) => {
+            await api.startForward(tabId, sel.namespace!, sel.name, port ?? 8080);
+            pushView({ kind: "forwards" });
+          },
+        };
+      } else if (k.kind === "Service" && k.group === "") {
+        confirm = {
+          message: `Forward service port of ${sel.name}`,
+          kind: "number",
+          run: async (port) => {
+            await api.forwardService(tabId, sel.namespace!, sel.name, port ?? 80);
+            pushView({ kind: "forwards" });
+          },
+        };
+      } else {
+        actionError = `port-forward not supported for ${k.kind}`;
+      }
+    },
+    history: () => {
+      const k = currentKind();
+      const sel = parseSelected();
+      if (!sel || sel.namespace === null) return;
+      if (k.kind !== "Deployment") {
+        actionError = `rollout history not supported for ${k.kind}`;
+        return;
+      }
+      pushView({ kind: "rollout", namespace: sel.namespace, name: sel.name });
+    },
+    drain: () => {
+      const sel = parseSelected();
+      if (!sel) return;
+      const k = currentKind();
+      if (k.kind !== "Node" || k.group !== "") {
+        actionError = `drain not supported for ${k.kind}`;
+        return;
+      }
       confirm = {
-        message: "Forward pod port",
-        kind: "number",
-        run: async (port) => {
-          await api.startForward(tabId, sel.namespace!, sel.name, port ?? 8080);
-          pushView({ kind: "forwards" });
+        message: `Drain ${sel.name}? (cordons, then evicts all non-DaemonSet pods)`,
+        kind: "confirm",
+        run: async () => {
+          const r = await api.drainNode(tabId, sel.name);
+          const failed = r.failed.length ? `, failed: ${r.failed.join("; ")}` : "";
+          notice = `drained ${sel.name}: ${r.evicted} evicted, ${r.skipped} skipped${failed}`;
         },
       };
+    },
+    trigger: () => {
+      const k = currentKind();
+      const sel = parseSelected();
+      if (!sel || sel.namespace === null) return;
+      if (k.kind !== "CronJob") {
+        actionError = `trigger not supported for ${k.kind}`;
+        return;
+      }
+      confirm = {
+        message: `Trigger ${sel.name} now?`,
+        kind: "confirm",
+        run: async () => {
+          const job = await api.triggerCronjob(tabId, sel.namespace!, sel.name);
+          notice = `created Job ${sel.namespace}/${job}`;
+        },
+      };
+    },
+    suspend: () => setCronjobSuspend(true),
+    resume: () => setCronjobSuspend(false),
+    viewPods: () => {
+      const sel = parseSelected();
+      if (!sel) return;
+      const k = currentKind();
+      if (!VIEW_PODS_KINDS.includes(k.kind)) {
+        actionError = `view pods not supported for ${k.kind}`;
+        return;
+      }
+      const name = sel.name;
+      popTo(0);
+      s.filter = name;
+    },
+    values: () => {
+      const k = currentKind();
+      const sel = parseSelected();
+      if (!sel || sel.namespace === null) return;
+      if (k.group !== "" || (k.kind !== "Secret" && k.kind !== "ConfigMap")) {
+        actionError = `values not supported for ${k.kind}`;
+        return;
+      }
+      pushView({
+        kind: "values",
+        title: `${k.kind} ${sel.name}`,
+        resourceKind: k,
+        namespace: sel.namespace,
+        name: sel.name,
+      });
     },
     move: (delta) => {
       const top = s.views.top.kind;
@@ -368,6 +537,15 @@
 
   onMount(() => {
     clusterKeyHandlers.set(tabId, (e) => {
+      if (menu !== null) {
+        // Any key dismisses the menu; Escape only dismisses, other keys fall
+        // through so row shortcuts (l, x, s, …) still fire.
+        menu = null;
+        if (e.key === "Escape") {
+          e.preventDefault();
+          return true;
+        }
+      }
       if (bar !== null || confirm !== null) return true; // a bar owns the keyboard; swallow
       return handleClusterKey(e, actions);
     });
@@ -449,6 +627,7 @@
               tabindex="0"
               onclick={() => (s.selected = pod.key)}
               ondblclick={() => activate(pod.key)}
+              oncontextmenu={(e) => openRowMenu(pod.key, e)}
               onkeydown={(e) => {
                 if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
                   e.preventDefault();
@@ -472,7 +651,8 @@
         {tabId}
         session={s}
         resourceKind={s.views.top.resourceKind}
-        onactivate={activate} />
+        onactivate={activate}
+        oncontextmenu={openRowMenu} />
     {:else if s.views.top.kind === "yaml"}
       <YamlView title={s.views.top.title} body={s.views.top.body} session={s} />
     {:else if s.views.top.kind === "yamlEdit"}
@@ -494,7 +674,14 @@
         body={s.views.top.body}
         session={s} />
     {:else if s.views.top.kind === "logs"}
-      <LogsView {tabId} namespace={s.views.top.namespace} pod={s.views.top.pod} session={s} />
+      {#key s.views.top}
+        <LogsView
+          {tabId}
+          namespace={s.views.top.namespace}
+          pods={s.views.top.pods}
+          label={s.views.top.label}
+          session={s} />
+      {/key}
     {:else if s.views.top.kind === "exec"}
       <TerminalView
         {tabId}
@@ -505,12 +692,34 @@
       <ForwardsView {tabId} session={s} />
     {:else if s.views.top.kind === "metrics"}
       <MetricsView {tabId} session={s} />
+    {:else if s.views.top.kind === "rollout"}
+      <RolloutView
+        {tabId}
+        namespace={s.views.top.namespace}
+        name={s.views.top.name}
+        session={s}
+        onundo={requestRolloutUndo} />
+    {:else if s.views.top.kind === "values"}
+      {#key s.views.top}
+        <ValuesView
+          {tabId}
+          resourceKind={s.views.top.resourceKind}
+          namespace={s.views.top.namespace}
+          name={s.views.top.name}
+          session={s} />
+      {/key}
     {/if}
 
     {#if actionError}
       <div class="detail-bar">
         <span class="st-bad">{actionError}</span>
         <button onclick={() => (actionError = null)}>Dismiss</button>
+      </div>
+    {/if}
+    {#if notice}
+      <div class="detail-bar">
+        <span class="st-ok">{notice}</span>
+        <button onclick={() => (notice = null)}>Dismiss</button>
       </div>
     {/if}
 
@@ -533,6 +742,15 @@
         kind={confirm.kind}
         onconfirm={onConfirmAccept}
         oncancel={onConfirmCancel} />
+    {/if}
+
+    {#if menu !== null}
+      <ContextMenu
+        x={menu.x}
+        y={menu.y}
+        groups={menu.groups}
+        onpick={onMenuPick}
+        onclose={() => (menu = null)} />
     {/if}
   {/if}
 </div>

@@ -540,15 +540,14 @@ impl ForwardInfo {
     }
 }
 
-#[tauri::command]
-pub async fn start_forward(
+async fn start_forward_inner(
+    sessions: &State<'_, Sessions>,
     tab_id: u32,
     namespace: String,
     pod: String,
     pod_port: u16,
-    sessions: State<'_, Sessions>,
 ) -> Result<ForwardInfo, String> {
-    let client = session_of(&sessions, tab_id).await?.client.clone();
+    let client = session_of(sessions, tab_id).await?.client.clone();
     let (stop_tx, stop_rx) = oneshot::channel();
     let (local_port, _handle) =
         kxs_cluster::portforward::start(client, namespace.clone(), pod.clone(), pod_port, stop_rx)
@@ -566,6 +565,37 @@ pub async fn start_forward(
     let info = ForwardInfo::new(id, &target);
     h.forwards.insert(id, (target, stop_tx));
     Ok(info)
+}
+
+#[tauri::command]
+pub async fn start_forward(
+    tab_id: u32,
+    namespace: String,
+    pod: String,
+    pod_port: u16,
+    sessions: State<'_, Sessions>,
+) -> Result<ForwardInfo, String> {
+    start_forward_inner(&sessions, tab_id, namespace, pod, pod_port).await
+}
+
+/// Port-forward to a Service by picking a ready endpoint pod behind it.
+#[tauri::command]
+pub async fn forward_service(
+    tab_id: u32,
+    namespace: String,
+    service: String,
+    service_port: u16,
+    sessions: State<'_, Sessions>,
+) -> Result<ForwardInfo, String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    let (pod, pod_port) = kxs_cluster::workloads::resolve_service_endpoint(
+        client,
+        &namespace,
+        &service,
+        service_port,
+    )
+    .await?;
+    start_forward_inner(&sessions, tab_id, namespace, pod, pod_port).await
 }
 
 #[tauri::command]
@@ -597,6 +627,103 @@ pub async fn list_forwards(
         .collect();
     v.sort_by_key(|f| f.id);
     Ok(v)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn list_workload_pods(
+    tab_id: u32,
+    group: String,
+    version: String,
+    kind: String,
+    plural: String,
+    namespace: String,
+    name: String,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<String>, String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    kxs_cluster::workloads::workload_pods(
+        client, &group, &version, &kind, &plural, &namespace, &name,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn rollout_history(
+    tab_id: u32,
+    namespace: String,
+    name: String,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<kxs_cluster::workloads::RolloutRevision>, String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    kxs_cluster::workloads::rollout_history(client, &namespace, &name).await
+}
+
+#[tauri::command]
+pub async fn rollout_undo(
+    tab_id: u32,
+    namespace: String,
+    name: String,
+    revision: i64,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    kxs_cluster::workloads::rollout_undo(client, &namespace, &name, revision).await
+}
+
+#[tauri::command]
+pub async fn drain_node(
+    tab_id: u32,
+    name: String,
+    sessions: State<'_, Sessions>,
+) -> Result<kxs_cluster::workloads::DrainReport, String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    kxs_cluster::workloads::drain_node(client, &name).await
+}
+
+#[tauri::command]
+pub async fn trigger_cronjob(
+    tab_id: u32,
+    namespace: String,
+    name: String,
+    sessions: State<'_, Sessions>,
+) -> Result<String, String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    kxs_cluster::workloads::trigger_cronjob(client, &namespace, &name).await
+}
+
+#[tauri::command]
+pub async fn suspend_cronjob(
+    tab_id: u32,
+    namespace: String,
+    name: String,
+    suspend: bool,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    kxs_cluster::edit::merge_patch(
+        client,
+        "batch",
+        "v1",
+        "CronJob",
+        "cronjobs",
+        Some(&namespace),
+        &name,
+        kxs_cluster::edit::suspend_patch(suspend),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_config_values(
+    tab_id: u32,
+    namespace: String,
+    name: String,
+    kind: String,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<kxs_cluster::workloads::ConfigEntry>, String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    kxs_cluster::workloads::config_values(client, &namespace, &name, &kind).await
 }
 
 #[tauri::command]

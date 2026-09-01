@@ -6,12 +6,20 @@ export interface ClusterActions {
   yaml(): void;
   edit(): void;
   logs(): void;
+  logsAll(): void;
   enter(): void;
   del(): void;
   scale(): void;
   restart(): void;
+  history(): void;
   cordon(): void;
   uncordon(): void;
+  drain(): void;
+  trigger(): void;
+  suspend(): void;
+  resume(): void;
+  viewPods(): void;
+  values(): void;
   shell(): void;
   forward(): void;
   /** Move the row selection by delta; returns false when the view has no rows to select. */

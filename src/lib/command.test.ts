@@ -125,7 +125,7 @@ describe("searchEnabled", () => {
       }),
     ).toBe(true);
     expect(searchEnabled({ kind: "yaml", title: "t", body: "" })).toBe(true);
-    expect(searchEnabled({ kind: "logs", namespace: "default", pod: "p" })).toBe(true);
+    expect(searchEnabled({ kind: "logs", namespace: "default", pods: ["p"], label: "p" })).toBe(true);
     expect(searchEnabled({ kind: "metrics" })).toBe(true);
     expect(searchEnabled({ kind: "forwards" })).toBe(true);
   });

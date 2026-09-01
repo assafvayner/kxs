@@ -12,11 +12,13 @@
     session,
     resourceKind,
     onactivate,
+    oncontextmenu,
   }: {
     tabId: number;
     session: TabSession;
     resourceKind: ResourceKind;
     onactivate: (key: string) => void;
+    oncontextmenu: (key: string, e: MouseEvent) => void;
   } = $props();
 
   let columns = $state<string[]>([]);
@@ -78,6 +80,7 @@
           tabindex="0"
           onclick={() => (session.selected = r.key)}
           ondblclick={() => onactivate(r.key)}
+          oncontextmenu={(e) => oncontextmenu(r.key, e)}
           onkeydown={(e) => {
             if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
               e.preventDefault();

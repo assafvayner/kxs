@@ -146,6 +146,27 @@ export interface ForwardInfo {
   podPort: number;
 }
 
+export interface RolloutRevision {
+  revision: number;
+  name: string;
+  created: string | null;
+  images: string[];
+  replicas: number;
+  current: boolean;
+}
+
+export interface DrainReport {
+  evicted: number;
+  skipped: number;
+  failed: string[];
+}
+
+export interface ConfigEntry {
+  key: string;
+  value: string;
+  binary: boolean;
+}
+
 export interface MetricsRow {
   key: string;
   name: string;
@@ -296,9 +317,32 @@ export const api = {
   stopExec: (tabId: number, execId: number) => invoke<void>("stop_exec", { tabId, execId }),
   startForward: (tabId: number, namespace: string, pod: string, podPort: number) =>
     invoke<ForwardInfo>("start_forward", { tabId, namespace, pod, podPort }),
+  forwardService: (tabId: number, namespace: string, service: string, servicePort: number) =>
+    invoke<ForwardInfo>("forward_service", { tabId, namespace, service, servicePort }),
   stopForward: (tabId: number, forwardId: number) =>
     invoke<void>("stop_forward", { tabId, forwardId }),
   listForwards: (tabId: number) => invoke<ForwardInfo[]>("list_forwards", { tabId }),
   podMetrics: (tabId: number, namespace: string | null) =>
     invoke<MetricsRow[]>("pod_metrics", { tabId, namespace }),
+  listWorkloadPods: (tabId: number, k: ResourceKind, namespace: string, name: string) =>
+    invoke<string[]>("list_workload_pods", {
+      tabId,
+      group: k.group,
+      version: k.version,
+      kind: k.kind,
+      plural: k.plural,
+      namespace,
+      name,
+    }),
+  rolloutHistory: (tabId: number, namespace: string, name: string) =>
+    invoke<RolloutRevision[]>("rollout_history", { tabId, namespace, name }),
+  rolloutUndo: (tabId: number, namespace: string, name: string, revision: number) =>
+    invoke<void>("rollout_undo", { tabId, namespace, name, revision }),
+  drainNode: (tabId: number, name: string) => invoke<DrainReport>("drain_node", { tabId, name }),
+  triggerCronjob: (tabId: number, namespace: string, name: string) =>
+    invoke<string>("trigger_cronjob", { tabId, namespace, name }),
+  suspendCronjob: (tabId: number, namespace: string, name: string, suspend: boolean) =>
+    invoke<void>("suspend_cronjob", { tabId, namespace, name, suspend }),
+  getConfigValues: (tabId: number, namespace: string, name: string, kind: string) =>
+    invoke<ConfigEntry[]>("get_config_values", { tabId, namespace, name, kind }),
 };
