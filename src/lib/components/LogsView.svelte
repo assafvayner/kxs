@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { api } from "../api";
   import type { TabSession } from "../stores/sessions.svelte";
   import { matchRow } from "../command";
+  import { copyText } from "../clipboard";
+  import { SINCE_OPTIONS, defaultTail, logWindow, tailOptions } from "../logOptions";
   let {
     tabId,
     namespace,
@@ -21,7 +23,13 @@
   let containers = $state<string[]>([]);
   let container = $state<string | undefined>(undefined);
   let follow = $state(true);
+  let previous = $state(false);
+  let timestamps = $state(false);
+  let sinceSeconds = $state(0);
+  let tail = $state(untrack(() => defaultTail(pods.length > 1)));
   let wrap = $state(true);
+  let copied = $state(false);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
   let lines = $state<string[]>([]);
   let error = $state<string | null>(null);
   let streamIds: number[] = [];
@@ -57,9 +65,11 @@
               namespace,
               pod,
               container: multi ? undefined : container,
-              follow,
-              tailLines: multi ? 200 : 1000,
-              timestamps: false,
+              // previous logs are a finished stream, so they can never follow
+              follow: follow && !previous,
+              previous: !multi && previous,
+              timestamps,
+              ...logWindow(sinceSeconds, tail),
             },
             (ev) => {
               if (mySeq !== seq) return; // superseded stream: ignore late events
@@ -95,7 +105,21 @@
     }
     await start();
   });
-  onDestroy(stopAll);
+  onDestroy(() => {
+    stopAll();
+    clearTimeout(copyTimer);
+  });
+
+  async function copyVisible() {
+    try {
+      await copyText(visible.join("\n"));
+      copied = true;
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copied = false), 1200);
+    } catch (e) {
+      error = String(e);
+    }
+  }
 
   const visible = $derived(session.filter ? lines.filter((l) => matchRow(l, session.filter)) : lines);
 
@@ -116,8 +140,23 @@
         {#each containers as c}<option value={c}>{c}</option>{/each}
       </select>
     {/if}
-    <label class="chk"><input type="checkbox" bind:checked={follow} onchange={start} /> follow</label>
+    <select bind:value={sinceSeconds} onchange={start} title="since">
+      {#each SINCE_OPTIONS as o}<option value={o.seconds}>{o.label}</option>{/each}
+    </select>
+    {#if sinceSeconds === 0}
+      <select bind:value={tail} onchange={start} title="tail lines{multi ? ' per pod' : ''}">
+        {#each tailOptions(multi) as n}<option value={n}>{n} lines</option>{/each}
+      </select>
+    {/if}
+    <label class="chk">
+      <input type="checkbox" bind:checked={follow} onchange={start} disabled={previous} /> follow
+    </label>
+    {#if !multi}
+      <label class="chk"><input type="checkbox" bind:checked={previous} onchange={start} /> previous</label>
+    {/if}
+    <label class="chk"><input type="checkbox" bind:checked={timestamps} onchange={start} /> ts</label>
     <label class="chk"><input type="checkbox" bind:checked={wrap} /> wrap</label>
+    <button onclick={copyVisible}>{copied ? "Copied!" : "Copy"}</button>
     <span class="dim">{visible.length}/{lines.length}</span>
   </div>
   {#if error}<div class="connect-error"><pre class="mono">{error}</pre></div>{/if}

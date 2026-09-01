@@ -100,6 +100,7 @@ export interface LogRequest {
   tailLines?: number;
   sinceSeconds?: number;
   timestamps: boolean;
+  previous: boolean;
 }
 
 export type LogEvent =
