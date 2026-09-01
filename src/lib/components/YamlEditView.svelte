@@ -31,8 +31,11 @@
   let busy = $state(false);
 
   let ta: HTMLTextAreaElement | undefined = $state();
+  let gutter: HTMLDivElement | undefined = $state();
   let vimState = $state<VimState>(initialVimState());
   const vimOn = $derived(settings.vimMode);
+  const lineCount = $derived(draft.split("\n").length);
+  const gutterDigits = $derived(String(lineCount).length);
 
   $effect(() => {
     // reset the engine whenever vim mode turns on
@@ -51,6 +54,49 @@
     if (s.mode === "ex") return ":" + s.exBuf;
     if (s.mode === "search") return "/" + s.searchBuf;
     return s.mode === "insert" ? "-- INSERT --" : "-- NORMAL --";
+  }
+
+  function onEditorScroll() {
+    if (gutter && ta) gutter.scrollTop = ta.scrollTop;
+  }
+
+  let charWidthCache: { font: string; width: number } | undefined;
+  function charWidthOf(style: CSSStyleDeclaration): number {
+    const font = style.font || `${style.fontSize} ${style.fontFamily}`;
+    if (charWidthCache?.font !== font) {
+      const ctx = document.createElement("canvas").getContext("2d");
+      let width = 8;
+      if (ctx) {
+        ctx.font = font;
+        width = ctx.measureText("0").width || 8;
+      }
+      charWidthCache = { font, width };
+    }
+    return charWidthCache.width;
+  }
+
+  function scrollCaretIntoView(el: HTMLTextAreaElement, text: string, caret: number) {
+    const style = getComputedStyle(el);
+    const lineHeight = parseFloat(style.lineHeight) || 16;
+    const lineStart = text.lastIndexOf("\n", caret - 1) + 1;
+    const line = text.slice(0, lineStart).split("\n").length - 1;
+    const col = caret - lineStart;
+
+    const top = line * lineHeight;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + lineHeight > el.scrollTop + el.clientHeight) {
+      el.scrollTop = top + lineHeight - el.clientHeight;
+    }
+
+    const charWidth = charWidthOf(style);
+    const left = col * charWidth;
+    const padRight = parseFloat(style.paddingRight) || 0;
+    const visibleWidth = el.clientWidth - padRight;
+    if (left < el.scrollLeft) el.scrollLeft = left;
+    else if (left + charWidth > el.scrollLeft + visibleWidth) {
+      el.scrollLeft = left + charWidth - visibleWidth;
+    }
+    onEditorScroll();
   }
 
   async function onEditorKeydown(e: KeyboardEvent) {
@@ -73,6 +119,7 @@
     if (!ta) return;
     if (r.effect !== "close" && r.effect !== "applyClose") {
       ta.selectionStart = ta.selectionEnd = r.caret;
+      scrollCaretIntoView(ta, draft, r.caret);
     }
     if (r.effect === "apply") {
       if (!busy && dirty) apply();
@@ -124,11 +171,26 @@
     {#if status.kind === "ok"}<span class="st-ok">{status.msg}</span>{/if}
     {#if status.kind === "err"}<span class="st-bad" title={status.msg}>apply failed</span>{/if}
   </div>
-  <textarea
-    class="yaml-editor mono"
-    bind:this={ta}
-    bind:value={draft}
-    spellcheck="false"
-    onkeydown={onEditorKeydown}></textarea>
+  <div class="yaml-editor-wrap">
+    <div
+      class="yaml-gutter mono"
+      bind:this={gutter}
+      style="--gutter-digits: {gutterDigits}"
+      aria-hidden="true"
+    >
+      {#each Array(lineCount) as _, i (i)}
+        <div class="yaml-gutter-line">{i + 1}</div>
+      {/each}
+    </div>
+    <textarea
+      class="yaml-editor mono"
+      bind:this={ta}
+      bind:value={draft}
+      spellcheck="false"
+      wrap="off"
+      onkeydown={onEditorKeydown}
+      onscroll={onEditorScroll}
+    ></textarea>
+  </div>
   {#if status.kind === "err"}<pre class="apply-err mono">{status.msg}</pre>{/if}
 </div>

@@ -253,6 +253,17 @@ describe("vim ex commands", () => {
     expect(r.caret).toBe(6); // start of "l3"
     expect(r.mode).toBe("normal");
   });
+  it(": then N jumps to the first non-blank of that line", () => {
+    const indented = "l1\n  l2\n    l3\nl4";
+    const r = run(indented, 0, [":", "3", "Enter"]);
+    expect(r.caret).toBe(12); // 'l' of "    l3", past the leading spaces
+    expect(r.mode).toBe("normal");
+  });
+  it(": then N clamps to the last line when out of range", () => {
+    const r = run(T, 0, [":", "9", "9", "Enter"]);
+    expect(r.caret).toBe(9); // start of "l4", the last line
+    expect(r.mode).toBe("normal");
+  });
   it(":Nd deletes a single line", () => {
     const r = run(T, 0, [":", "2", "d", "Enter"]);
     expect(r.text).toBe("l1\nl3\nl4");
