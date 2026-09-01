@@ -157,6 +157,14 @@ body.col-resizing, body.col-resizing * { cursor: col-resize; }
 .detail-body .hl { background: #3b331c; }
 .hltext { margin: 0; }
 .hltext .hl { background: #3b331c; }
+.yh-key { color: var(--accent); }
+.yh-str { color: var(--green); }
+.yh-num { color: var(--yellow); }
+.yh-cmt { color: var(--fg-dim); }
+.yh-docsep { color: var(--fg-dim); font-weight: 600; }
+.yh-dash { color: var(--fg-dim); }
+.yh-anchor { color: #bb9af7; }
+.yh-tag { color: #7dcfff; }
 .yaml-editor-wrap { flex: 1; display: flex; min-height: 0; }
 .yaml-gutter { flex: none; width: calc(var(--gutter-digits, 2) * 1ch + 20px); padding: 12px 10px 12px 4px; overflow: hidden; font-size: 12px; line-height: 1.5; color: var(--fg-dim); text-align: right; background: var(--bg); user-select: none; }
 .yaml-gutter-line { white-space: pre; }
