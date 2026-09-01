@@ -2,11 +2,19 @@
   import { contexts } from "../stores/contexts.svelte";
   import { tabs } from "../stores/tabs.svelte";
   import { api } from "../api";
+  import { matchRow } from "../command";
   import ContextForm from "./ContextForm.svelte";
 
   // undefined = list view; null = create form; string = edit form for that name
   let editing = $state<string | null | undefined>(undefined);
   let confirmingDelete = $state<string | null>(null);
+
+  let filter = $state("");
+  const visible = $derived(
+    contexts.view.contexts.filter((ctx) =>
+      [ctx.name, ctx.cluster, ctx.user, ctx.namespace ?? ""].some((v) => matchRow(v, filter)),
+    ),
+  );
 
   async function remove(name: string) {
     try {
@@ -62,12 +70,32 @@
         Create one to get started.
       </p>
     {:else}
+      <div class="searchbar launch-filter">
+        <span class="mag">🔍</span>
+        <input
+          bind:value={filter}
+          placeholder="filter contexts (-r for regex)"
+          class="mono"
+          onkeydown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              if (filter) filter = "";
+              else (e.currentTarget as HTMLInputElement).blur();
+            }
+          }} />
+        {#if filter}
+          <button type="button" class="clear" onclick={() => (filter = "")} title="clear">×</button>
+        {/if}
+      </div>
+      {#if visible.length === 0}
+        <p class="dim">No contexts match “{filter}”.</p>
+      {/if}
       <table>
         <thead>
           <tr><th></th><th></th><th>Context</th><th>Cluster</th><th>User</th><th>Namespace</th><th>Source</th><th></th></tr>
         </thead>
         <tbody>
-          {#each contexts.view.contexts as ctx (ctx.name)}
+          {#each visible as ctx (ctx.name)}
             <tr
               class="clickable"
               onclick={() => tabs.open(ctx.name)}
