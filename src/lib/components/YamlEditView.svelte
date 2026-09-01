@@ -152,6 +152,12 @@
     }
   }
 
+  // Vim: paste is insert-mode only (native paste leaves the mode unchanged,
+  // so pasting in insert mode stays in insert mode).
+  function onEditorPaste(e: ClipboardEvent) {
+    if (vimOn && vimState.mode !== "insert") e.preventDefault();
+  }
+
   async function validate() {
     busy = true;
     try {
@@ -226,6 +232,7 @@
       spellcheck="false"
       wrap="off"
       onkeydown={onEditorKeydown}
+      onpaste={onEditorPaste}
       onscroll={onEditorScroll}
     ></textarea>
   </div>
