@@ -187,6 +187,8 @@ function pod(p: Partial<PodRow> & { name: string }): PodRow {
     ip: p.ip ?? null,
     node: p.node ?? null,
     created: p.created ?? null,
+    cpuRequestMillis: p.cpuRequestMillis ?? null,
+    memRequestMib: p.memRequestMib ?? null,
   };
 }
 
