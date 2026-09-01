@@ -459,9 +459,23 @@ mod tests {
         .await
         .unwrap();
 
-        // the orphaned ReplicaSet outlives its owner
-        let rs = rs_api.get(&rs_name).await.unwrap();
-        assert!(rs.metadata.owner_references.unwrap_or_default().is_empty());
+        // The orphaned ReplicaSet outlives its owner. Orphaning is async: the
+        // delete call returns once the orphan finalizer is set, and the GC
+        // strips ownerReferences afterwards — so poll instead of asserting
+        // immediately.
+        let mut orphaned = false;
+        for _ in 0..30 {
+            let rs = rs_api.get(&rs_name).await.unwrap();
+            if rs.metadata.owner_references.unwrap_or_default().is_empty() {
+                orphaned = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        assert!(
+            orphaned,
+            "ownerReferences never removed from orphaned ReplicaSet"
+        );
 
         // cleanup: namespace deletion reaps the orphan
         let _ = delete_resource(
