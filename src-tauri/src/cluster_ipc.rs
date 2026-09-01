@@ -178,6 +178,17 @@ pub async fn list_containers(
 }
 
 #[tauri::command]
+pub async fn list_container_info(
+    tab_id: u32,
+    namespace: String,
+    pod: String,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<kxs_cluster::pods::ContainerInfo>, String> {
+    let session = session_of(&sessions, tab_id).await?;
+    kxs_cluster::pods::list_container_info(session.client.clone(), &namespace, &pod).await
+}
+
+#[tauri::command]
 pub async fn stream_logs(
     tab_id: u32,
     request: kxs_cluster::logs::LogRequest,

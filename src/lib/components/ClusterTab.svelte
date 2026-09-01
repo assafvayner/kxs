@@ -22,8 +22,16 @@
     type MenuActionId,
     type MenuItem,
   } from "../contextMenu";
+  import {
+    containerOptions,
+    execContainers,
+    portChoices,
+    type PickOption,
+    type PortChoice,
+  } from "../containers";
   import VirtualList from "./VirtualList.svelte";
   import ContextMenu from "./ContextMenu.svelte";
+  import PickList from "./PickList.svelte";
   import CommandBar from "./CommandBar.svelte";
   import ConfirmBar from "./ConfirmBar.svelte";
   import ResourcePicker from "./ResourcePicker.svelte";
@@ -57,6 +65,11 @@
   let actionError = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let menu = $state<null | { x: number; y: number; groups: MenuItem[][] }>(null);
+  let pick = $state<null | {
+    title: string;
+    options: PickOption[];
+    run: (index: number) => void;
+  }>(null);
 
   async function connect() {
     s.status = "connecting";
@@ -157,17 +170,20 @@
   function pushView(v: View) {
     s.selected = null;
     menu = null;
+    pick = null;
     s.views.push(v);
   }
   function popView() {
     s.selected = null;
     menu = null;
+    pick = null;
     s.views.pop();
   }
   function popTo(i: number) {
     while (s.views.depth > i + 1) s.views.pop();
     s.selected = null;
     menu = null;
+    pick = null;
   }
 
   function viewLabel(v: View): string {
@@ -395,7 +411,7 @@
         run: () => api.cordonNode(tabId, sel.name, false),
       };
     },
-    shell: () => {
+    shell: async () => {
       const k = currentKind();
       if (k.kind !== "Pod" || k.group !== "") {
         actionError = `shell not supported for ${k.kind}`;
@@ -403,19 +419,68 @@
       }
       const sel = parseSelected();
       if (!sel || sel.namespace === null) return;
-      pushView({ kind: "exec", namespace: sel.namespace, pod: sel.name, container: null });
+      const namespace = sel.namespace;
+      const pod = sel.name;
+      const open = (container: string | null) =>
+        pushView({ kind: "exec", namespace, pod, container });
+      let containers;
+      try {
+        containers = execContainers(await api.listContainerInfo(tabId, namespace, pod));
+      } catch {
+        open(null); // lookup failed: let the API server pick the default container
+        return;
+      }
+      if (containers.length <= 1) {
+        open(containers[0]?.name ?? null);
+        return;
+      }
+      pick = {
+        title: `Shell into ${pod}`,
+        options: containerOptions(containers),
+        run: (i) => open(containers[i].name),
+      };
     },
-    forward: () => {
+    forward: async () => {
       const k = currentKind();
       const sel = parseSelected();
       if (!sel || sel.namespace === null) return;
       if (k.kind === "Pod" && k.group === "") {
-        confirm = {
-          message: "Forward pod port",
-          kind: "number",
-          run: async (port) => {
-            await api.startForward(tabId, sel.namespace!, sel.name, port ?? 8080);
+        const namespace = sel.namespace;
+        const pod = sel.name;
+        const startForward = async (port: number) => {
+          try {
+            await api.startForward(tabId, namespace, pod, port);
             pushView({ kind: "forwards" });
+          } catch (e) {
+            actionError = String(e);
+          }
+        };
+        const promptPort = () => {
+          confirm = {
+            message: "Forward pod port",
+            kind: "number",
+            run: async (port) => {
+              await api.startForward(tabId, namespace, pod, port ?? 8080);
+              pushView({ kind: "forwards" });
+            },
+          };
+        };
+        let choices: PortChoice[] = [];
+        try {
+          choices = portChoices(await api.listContainerInfo(tabId, namespace, pod));
+        } catch {
+          // lookup failed: fall through to the typed prompt
+        }
+        if (choices.length === 0) {
+          promptPort();
+          return;
+        }
+        pick = {
+          title: `Forward port of ${pod}`,
+          options: [...choices.map((c) => ({ label: c.label })), { label: "Other…" }],
+          run: (i) => {
+            if (i === choices.length) promptPort();
+            else startForward(choices[i].port);
           },
         };
       } else if (k.kind === "Service" && k.group === "") {
@@ -546,7 +611,7 @@
           return true;
         }
       }
-      if (bar !== null || confirm !== null) return true; // a bar owns the keyboard; swallow
+      if (bar !== null || confirm !== null || pick !== null) return true; // a bar owns the keyboard; swallow
       return handleClusterKey(e, actions);
     });
     connect();
@@ -742,6 +807,18 @@
         kind={confirm.kind}
         onconfirm={onConfirmAccept}
         oncancel={onConfirmCancel} />
+    {/if}
+
+    {#if pick !== null}
+      <PickList
+        title={pick.title}
+        options={pick.options}
+        onpick={(i) => {
+          const chosen = pick;
+          pick = null;
+          chosen?.run(i);
+        }}
+        onclose={() => (pick = null)} />
     {/if}
 
     {#if menu !== null}

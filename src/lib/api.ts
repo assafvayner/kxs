@@ -107,6 +107,20 @@ export type LogEvent =
   | { type: "error"; message: string }
   | { type: "eof" };
 
+export interface ContainerPortInfo {
+  name: string | null;
+  containerPort: number;
+}
+
+export interface ContainerInfo {
+  name: string;
+  image: string;
+  ready: boolean;
+  restarts: number;
+  ports: ContainerPortInfo[];
+  initContainer: boolean;
+}
+
 export interface ResourceKind {
   group: string;
   version: string;
@@ -192,6 +206,8 @@ export const api = {
   },
   listContainers: (tabId: number, namespace: string, pod: string) =>
     invoke<string[]>("list_containers", { tabId, namespace, pod }),
+  listContainerInfo: (tabId: number, namespace: string, pod: string) =>
+    invoke<ContainerInfo[]>("list_container_info", { tabId, namespace, pod }),
   streamLogs: (tabId: number, request: LogRequest, onEvent: (e: LogEvent) => void) => {
     const channel = new Channel<LogEvent>();
     channel.onmessage = onEvent;

@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{Container, ContainerStatus, Pod};
 use kube::api::Api;
 use kube::runtime::watcher;
 use kube::Client;
@@ -125,6 +125,74 @@ pub fn pod_row(pod: &Pod) -> PodRow {
         node: pod.spec.as_ref().and_then(|s| s.node_name.clone()),
         created: meta.creation_timestamp.as_ref().map(|t| t.0.to_rfc3339()),
     }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerPortInfo {
+    pub name: Option<String>,
+    pub container_port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerInfo {
+    pub name: String,
+    pub image: String,
+    pub ready: bool,
+    pub restarts: i32,
+    pub ports: Vec<ContainerPortInfo>,
+    pub init_container: bool,
+}
+
+/// Per-container spec+status view, init containers first (same order as
+/// `logs::list_containers`).
+pub fn container_infos(pod: &Pod) -> Vec<ContainerInfo> {
+    let Some(spec) = pod.spec.as_ref() else {
+        return Vec::new();
+    };
+    let status = pod.status.as_ref();
+    let one = |c: &Container, init: bool, statuses: Option<&[ContainerStatus]>| {
+        let st = statuses.and_then(|v| v.iter().find(|s| s.name == c.name));
+        ContainerInfo {
+            name: c.name.clone(),
+            image: c.image.clone().unwrap_or_default(),
+            ready: st.map(|s| s.ready).unwrap_or(false),
+            restarts: st.map(|s| s.restart_count).unwrap_or(0),
+            ports: c
+                .ports
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                // containerPort is i32 in the API but always a valid TCP/UDP port
+                .filter(|p| (1..=u16::MAX as i32).contains(&p.container_port))
+                .map(|p| ContainerPortInfo {
+                    name: p.name.clone(),
+                    container_port: p.container_port as u16,
+                })
+                .collect(),
+            init_container: init,
+        }
+    };
+    let init_statuses = status.and_then(|s| s.init_container_statuses.as_deref());
+    let statuses = status.and_then(|s| s.container_statuses.as_deref());
+    spec.init_containers
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .map(|c| one(c, true, init_statuses))
+        .chain(spec.containers.iter().map(|c| one(c, false, statuses)))
+        .collect()
+}
+
+pub async fn list_container_info(
+    client: Client,
+    namespace: &str,
+    pod: &str,
+) -> Result<Vec<ContainerInfo>, String> {
+    let api: Api<Pod> = Api::namespaced(client, namespace);
+    let p = api.get(pod).await.map_err(|e| e.to_string())?;
+    Ok(container_infos(&p))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -364,6 +432,79 @@ mod tests {
         assert_eq!(r.restarts, 0);
     }
 
+    #[test]
+    fn container_infos_maps_spec_and_status() {
+        let p = pod(serde_json::json!({
+            "metadata": {"name": "web-1", "namespace": "app"},
+            "spec": {
+                "initContainers": [{"name": "migrate", "image": "migrate:1"}],
+                "containers": [
+                    {"name": "web", "image": "nginx:1.27", "ports": [
+                        {"name": "http", "containerPort": 8080},
+                        {"containerPort": 9090}
+                    ]},
+                    {"name": "sidecar", "image": "envoy:1.30"}
+                ]
+            },
+            "status": {"phase": "Running",
+                "initContainerStatuses": [
+                    {"name": "migrate", "ready": false, "restartCount": 1, "state": {"terminated": {"exitCode": 0}}}
+                ],
+                "containerStatuses": [
+                    {"name": "web", "ready": true, "restartCount": 3, "state": {"running": {}}},
+                    {"name": "sidecar", "ready": false, "restartCount": 0, "state": {"running": {}}}
+                ]}
+        }));
+        let infos = container_infos(&p);
+        assert_eq!(
+            infos.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            vec!["migrate", "web", "sidecar"],
+            "init containers come first"
+        );
+        assert!(infos[0].init_container);
+        assert_eq!(infos[0].restarts, 1);
+        assert!(!infos[0].ready);
+        assert!(infos[0].ports.is_empty());
+        assert!(!infos[1].init_container);
+        assert_eq!(infos[1].image, "nginx:1.27");
+        assert!(infos[1].ready);
+        assert_eq!(infos[1].restarts, 3);
+        assert_eq!(
+            infos[1].ports,
+            vec![
+                ContainerPortInfo {
+                    name: Some("http".into()),
+                    container_port: 8080
+                },
+                ContainerPortInfo {
+                    name: None,
+                    container_port: 9090
+                }
+            ]
+        );
+        assert_eq!(infos[2].name, "sidecar");
+    }
+
+    #[test]
+    fn container_infos_without_status_defaults() {
+        let p = pod(serde_json::json!({
+            "metadata": {"name": "x", "namespace": "d"},
+            "spec": {"containers": [{"name": "a", "ports": [{"containerPort": 0}, {"containerPort": 70000}]}]}
+        }));
+        let infos = container_infos(&p);
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].image, "");
+        assert!(!infos[0].ready);
+        assert_eq!(infos[0].restarts, 0);
+        assert!(infos[0].ports.is_empty(), "out-of-range ports dropped");
+    }
+
+    #[test]
+    fn container_infos_no_spec_is_empty() {
+        let p = pod(serde_json::json!({"metadata": {"name": "x", "namespace": "d"}}));
+        assert!(container_infos(&p).is_empty());
+    }
+
     fn row(key: &str) -> PodRow {
         PodRow {
             key: key.into(),
@@ -484,14 +625,55 @@ mod tests {
         assert!(last_snap.iter().any(|r| r.name == "bar"));
     }
 
+    async fn kind_session() -> crate::session::ClusterSession {
+        let paths = kxs_core::kubeconfig::paths::kubeconfig_paths();
+        let store = kxs_core::kubeconfig::store::KubeconfigStore::load(paths).unwrap();
+        let yaml = crate::bridge::kubeconfig_yaml_for_context(&store, "kind-local").unwrap();
+        crate::session::connect(&yaml, "kind-local").await.unwrap()
+    }
+
+    /// Run manually: cargo test -p kxs-cluster -- --ignored (needs kind-local).
+    #[tokio::test]
+    #[ignore]
+    async fn list_container_info_reads_demo_pod_on_kind_local() {
+        let s = kind_session().await;
+        let infos = list_container_info(s.client.clone(), "default", "demo-standalone")
+            .await
+            .unwrap();
+        assert!(!infos.is_empty(), "demo-standalone should have containers");
+        assert!(infos
+            .iter()
+            .all(|c| !c.name.is_empty() && !c.image.is_empty()));
+
+        // demo-web's pods declare port 80
+        let pods = crate::workloads::workload_pods(
+            s.client.clone(),
+            "apps",
+            "v1",
+            "Deployment",
+            "deployments",
+            "default",
+            "demo-web",
+        )
+        .await
+        .unwrap();
+        let pod = pods.first().expect("demo-web should have pods");
+        let infos = list_container_info(s.client.clone(), "default", pod)
+            .await
+            .unwrap();
+        assert!(
+            infos
+                .iter()
+                .any(|c| c.ports.iter().any(|p| p.container_port == 80)),
+            "{infos:?}"
+        );
+    }
+
     /// Run manually: cargo test -p kxs-cluster -- --ignored (needs kind-local in ~/.kube/config)
     #[tokio::test]
     #[ignore]
     async fn watches_kind_local_pods() {
-        let paths = kxs_core::kubeconfig::paths::kubeconfig_paths();
-        let store = kxs_core::kubeconfig::store::KubeconfigStore::load(paths).unwrap();
-        let yaml = crate::bridge::kubeconfig_yaml_for_context(&store, "kind-local").unwrap();
-        let session = crate::session::connect(&yaml, "kind-local").await.unwrap();
+        let session = kind_session().await;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(run_pod_watch(

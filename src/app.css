@@ -182,6 +182,16 @@ table.events td, table.events th { font-size: 12px; }
 .ctxmenu-item.danger { color: var(--red); }
 .ctxmenu-key { color: var(--fg-dim); font-size: 11px; }
 .ctxmenu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+.picklist {
+  position: fixed; z-index: 100; left: 50%; bottom: 48px; transform: translateX(-50%);
+  min-width: 320px; max-width: 640px; max-height: 60vh; overflow: auto; padding: 4px;
+  display: flex; flex-direction: column;
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); user-select: none;
+}
+.picklist:focus { outline: none; }
+.picklist-title { padding: 4px 10px; font-size: 11px; text-transform: uppercase; font-weight: 600; }
+.picklist .ctxmenu-item.active { background: var(--bg-active); }
 .values-actions { display: flex; gap: 6px; }
 .values-actions button { padding: 2px 8px; font-size: 12px; }
 
