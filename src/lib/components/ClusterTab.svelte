@@ -33,6 +33,13 @@
     type PortChoice,
   } from "../containers";
   import { ColumnWidths, startColumnDrag } from "../columnResize.svelte";
+  import {
+    loadViewMemory,
+    namespaceAvailable,
+    resolveRememberedResource,
+    saveViewMemory,
+    viewMemoryOf,
+  } from "../viewMemory";
   import VirtualList from "./VirtualList.svelte";
   import ContextMenu from "./ContextMenu.svelte";
   import PickList from "./PickList.svelte";
@@ -57,6 +64,41 @@
   const s = new TabSession();
   // svelte-ignore state_referenced_locally
   sessions.set(tabId, s);
+
+  // svelte-ignore state_referenced_locally -- a tab is bound to one context for its lifetime
+  const remembered = loadViewMemory(context);
+  // Applied before the search bar mounts so it seeds from the restored filter.
+  if (remembered) s.filter = remembered.filter;
+  /** Restore is still owed; cleared once applied or once the user has moved. */
+  let restorePending = remembered !== null;
+  /** Persisting starts only once the restore settled, so a tab closed mid-restore keeps its memory. */
+  let canPersist = $state(false);
+  let defaultNamespace: string | null = null;
+
+  /** Any user navigation abandons the pending restore rather than fighting it. */
+  function abandonRestore() {
+    restorePending = false;
+    canPersist = true;
+  }
+
+  function restoreNamespace() {
+    if (!restorePending || !remembered) return;
+    if (namespaceAvailable(s.namespaces, remembered.namespace)) return;
+    s.namespace = defaultNamespace;
+  }
+
+  function restoreTopView() {
+    if (restorePending && remembered?.resource && s.views.depth === 1 && s.views.top.kind === "pods") {
+      const k = resolveRememberedResource(s.kinds, remembered.resource);
+      if (k) s.views.replaceTop({ kind: "resource", resourceKind: k });
+    }
+    abandonRestore();
+  }
+
+  $effect(() => {
+    if (!canPersist) return;
+    saveViewMemory(context, viewMemoryOf(s.namespace, s.views.stack, s.filter));
+  });
 
   let destroyed = false;
   let bar = $state<"command" | null>(null);
@@ -86,20 +128,27 @@
         return;
       }
       s.version = info.version;
-      s.namespace = info.defaultNamespace || null;
+      defaultNamespace = info.defaultNamespace || null;
+      // Applied optimistically so the first watch already targets it; reverted
+      // to the default below if the namespace turns out to be gone.
+      s.namespace = restorePending && remembered ? remembered.namespace : defaultNamespace;
       // the watch itself is started by the effect that tracks namespace + selector
       s.status = "ready";
       api
         .listNamespaces(tabId)
-        .then((ns) => (s.namespaces = ns.sort()))
+        .then((ns) => {
+          s.namespaces = ns.sort();
+          restoreNamespace();
+        })
         .catch(() => {});
       api
         .listResourceKinds(tabId)
         .then((k) => {
           s.kinds = k;
+          restoreTopView();
           refreshPresentKinds();
         })
-        .catch(() => {});
+        .catch(abandonRestore);
     } catch (e) {
       if (destroyed) return;
       s.status = "error";
@@ -142,6 +191,7 @@
 
   // The pods watch restarts via the effect below; only the picker needs a nudge.
   function onNamespaceChange() {
+    abandonRestore();
     refreshPresentKinds();
   }
 
@@ -265,6 +315,7 @@
   }
 
   function pushView(v: View) {
+    abandonRestore();
     s.selected = null;
     menu = null;
     pick = null;
