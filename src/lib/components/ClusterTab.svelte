@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "../api";
-  import type { PodRow, ResourceKind } from "../api";
+  import type { DeleteOptions, PodRow, ResourceKind } from "../api";
+  import { copyText } from "../clipboard";
   import { sessions, TabSession } from "../stores/sessions.svelte";
   import type { View } from "../stores/viewstack.svelte";
   import { now } from "../stores/now.svelte";
@@ -57,8 +58,8 @@
   let bar = $state<"command" | null>(null);
   let confirm = $state<null | {
     message: string;
-    kind: "confirm" | "number";
-    run: (value?: number) => Promise<void>;
+    kind: "confirm" | "number" | "delete";
+    run: (value?: number, opts?: DeleteOptions) => Promise<void>;
     clearSelectionOnSuccess?: boolean;
   }>(null);
   let searchBar: { focus: () => void } | undefined = $state();
@@ -349,10 +350,32 @@
       const k = currentKind();
       confirm = {
         message: `Delete ${k.kind} ${sel.name}?`,
-        kind: "confirm",
-        run: () => api.deleteResource(tabId, k, sel.namespace, sel.name),
+        kind: "delete",
+        run: (_value, opts) => api.deleteResource(tabId, k, sel.namespace, sel.name, opts),
         clearSelectionOnSuccess: true,
       };
+    },
+    copyName: async () => {
+      const sel = parseSelected();
+      if (!sel) return;
+      try {
+        await copyText(sel.name);
+        notice = `copied ${sel.name}`;
+      } catch (e) {
+        actionError = String(e);
+      }
+    },
+    copyYaml: async () => {
+      const sel = parseSelected();
+      if (!sel) return;
+      const k = currentKind();
+      try {
+        const body = await api.getResourceYaml(tabId, k, sel.namespace, sel.name);
+        await copyText(body);
+        notice = `copied YAML of ${k.kind} ${sel.name}`;
+      } catch (e) {
+        actionError = String(e);
+      }
     },
     scale: () => {
       const sel = parseSelected();
@@ -582,12 +605,12 @@
     hasSelection: () => s.selected !== null,
   };
 
-  async function onConfirmAccept(value?: number) {
+  async function onConfirmAccept(value?: number, opts?: DeleteOptions) {
     if (!confirm) return;
     const run = confirm.run;
     const clearSelectionOnSuccess = confirm.clearSelectionOnSuccess === true;
     try {
-      await run(value);
+      await run(value, opts);
       actionError = null;
       if (clearSelectionOnSuccess) s.selected = null;
     } catch (e) {

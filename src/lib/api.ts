@@ -189,6 +189,15 @@ export interface MetricsRow {
   memMib: number;
 }
 
+export type PropagationPolicy = "Background" | "Foreground" | "Orphan";
+
+export interface DeleteOptions {
+  /** Omitted → the server's per-resource default garbage-collection policy. */
+  propagation?: PropagationPolicy | null;
+  /** Grace period 0, for objects stuck terminating. */
+  force?: boolean;
+}
+
 export const api = {
   listContexts: () => invoke<KubeconfigView>("list_contexts"),
   getContext: (name: string) => invoke<ContextDetail>("get_context", { name }),
@@ -257,7 +266,13 @@ export const api = {
       yaml,
       dryRun,
     }),
-  deleteResource: (tabId: number, k: ResourceKind, namespace: string | null, name: string) =>
+  deleteResource: (
+    tabId: number,
+    k: ResourceKind,
+    namespace: string | null,
+    name: string,
+    opts: DeleteOptions = {},
+  ) =>
     invoke<void>("delete_resource", {
       tabId,
       group: k.group,
@@ -266,6 +281,8 @@ export const api = {
       plural: k.plural,
       namespace,
       name,
+      propagation: opts.propagation ?? null,
+      force: opts.force ?? false,
     }),
   scaleResource: (
     tabId: number,

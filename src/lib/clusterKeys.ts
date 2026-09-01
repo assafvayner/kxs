@@ -5,6 +5,8 @@ export interface ClusterActions {
   describe(): void;
   yaml(): void;
   edit(): void;
+  copyName(): void;
+  copyYaml(): void;
   logs(): void;
   logsAll(): void;
   enter(): void;
