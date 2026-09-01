@@ -26,6 +26,9 @@
   let draft = $state(body);
   // svelte-ignore state_referenced_locally -- one-time seed of the saved baseline from the initial prop value
   let saved = $state(body);
+  // svelte-ignore state_referenced_locally -- one-time seed of the server baseline from the initial prop value
+  // The document the edit is diffed against; only a server round-trip moves it.
+  let base = $state(body);
   let dirty = $derived(draft !== saved);
   let status = $state<{ kind: "idle" | "ok" | "err"; msg: string }>({ kind: "idle", msg: "" });
   let busy = $state(false);
@@ -44,11 +47,26 @@
 
   onMount(() => ta?.focus());
 
+  let reseeding = false;
   $effect(() => {
-    // any edit invalidates a prior validate/apply status
+    // any edit invalidates a prior validate/apply status, but reseeding the
+    // draft from the server is not an edit
     void draft;
+    if (reseeding) {
+      reseeding = false;
+      return;
+    }
     status = { kind: "idle", msg: "" };
   });
+
+  function reseed(yaml: string) {
+    base = yaml;
+    saved = yaml;
+    if (draft !== yaml) {
+      reseeding = true;
+      draft = yaml;
+    }
+  }
 
   function vimStatus(s: VimState): string {
     if (s.mode === "ex") return ":" + s.exBuf;
@@ -137,7 +155,7 @@
   async function validate() {
     busy = true;
     try {
-      await api.applyYaml(tabId, resourceKind, namespace, name, draft, true);
+      await api.applyYaml(tabId, resourceKind, namespace, name, base, draft, true);
       status = { kind: "ok", msg: "Valid (dry-run passed)" };
     } catch (e) {
       status = { kind: "err", msg: String(e) };
@@ -148,13 +166,29 @@
   async function apply(): Promise<boolean> {
     busy = true;
     try {
-      await api.applyYaml(tabId, resourceKind, namespace, name, draft, false);
-      saved = draft;
-      status = { kind: "ok", msg: "Applied" };
+      const fresh = await api.applyYaml(tabId, resourceKind, namespace, name, base, draft, false);
+      if (fresh === null) {
+        saved = draft;
+        status = { kind: "ok", msg: "No changes to apply" };
+      } else {
+        reseed(fresh);
+        status = { kind: "ok", msg: "Applied" };
+      }
       return true;
     } catch (e) {
       status = { kind: "err", msg: String(e) };
       return false;
+    } finally {
+      busy = false;
+    }
+  }
+  async function reload() {
+    busy = true;
+    try {
+      reseed(await api.getResourceYaml(tabId, resourceKind, namespace, name));
+      status = { kind: "ok", msg: "Reloaded from the server" };
+    } catch (e) {
+      status = { kind: "err", msg: String(e) };
     } finally {
       busy = false;
     }
@@ -169,7 +203,10 @@
     {#if dirty}<span class="dim">● unsaved</span>{/if}
     {#if vimOn}<span class="vim-mode mono" aria-live="polite">{vimStatus(vimState)}</span>{/if}
     {#if status.kind === "ok"}<span class="st-ok">{status.msg}</span>{/if}
-    {#if status.kind === "err"}<span class="st-bad" title={status.msg}>apply failed</span>{/if}
+    {#if status.kind === "err"}
+      <span class="st-bad" title={status.msg}>apply failed</span>
+      <button onclick={reload} disabled={busy}>Reload</button>
+    {/if}
   </div>
   <div class="yaml-editor-wrap">
     <div

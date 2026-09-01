@@ -391,6 +391,9 @@ pub async fn get_resource_events(
     .await)
 }
 
+/// Applies `yaml` as a merge patch of its diff against `base_yaml`, the
+/// document the editor was opened with. Returns the fresh server YAML, or
+/// `None` when nothing was written (dry run, or an edit that changed nothing).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn apply_resource_yaml(
@@ -401,12 +404,13 @@ pub async fn apply_resource_yaml(
     plural: String,
     namespace: Option<String>,
     name: String,
+    base_yaml: String,
     yaml: String,
     dry_run: bool,
     sessions: State<'_, Sessions>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let session = session_of(&sessions, tab_id).await?;
-    kxs_cluster::edit::apply_yaml(
+    kxs_cluster::edit::apply_edit(
         session.client.clone(),
         &group,
         &version,
@@ -414,6 +418,7 @@ pub async fn apply_resource_yaml(
         &plural,
         namespace.as_deref(),
         &name,
+        &base_yaml,
         &yaml,
         dry_run,
     )

@@ -298,15 +298,19 @@ export const api = {
     }),
   getResourceEvents: (tabId: number, namespace: string | null, kind: string, name: string) =>
     invoke<ResourceEvent[]>("get_resource_events", { tabId, namespace, kind, name }),
+  /// Applies the diff of `yaml` against `baseYaml` (the document the editor was
+  /// opened with). Resolves to the fresh server YAML, or null when nothing was
+  /// written (dry run, or an edit that changed nothing).
   applyYaml: (
     tabId: number,
     k: ResourceKind,
     namespace: string | null,
     name: string,
+    baseYaml: string,
     yaml: string,
     dryRun: boolean,
   ) =>
-    invoke<void>("apply_resource_yaml", {
+    invoke<string | null>("apply_resource_yaml", {
       tabId,
       group: k.group,
       version: k.version,
@@ -314,6 +318,7 @@ export const api = {
       plural: k.plural,
       namespace,
       name,
+      baseYaml,
       yaml,
       dryRun,
     }),

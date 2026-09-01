@@ -1,7 +1,7 @@
 use crate::resources::api_resource;
 use kube::api::{Api, DeleteParams, DynamicObject, Patch, PatchParams, PropagationPolicy};
 use kube::Client;
-use serde_json::json;
+use serde_json::{json, Map, Value};
 
 pub struct ParsedManifest {
     pub group: String,
@@ -105,6 +105,175 @@ pub async fn apply_yaml(
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// RFC 7386 JSON Merge Patch turning `base` into `edited`: keys dropped by the
+/// edit become `null`, objects are diffed recursively, and everything else
+/// (arrays included) is replaced wholesale.
+pub fn merge_patch_diff(base: &Value, edited: &Value) -> Value {
+    let (Value::Object(b), Value::Object(e)) = (base, edited) else {
+        return edited.clone();
+    };
+    let mut out = Map::new();
+    for (k, bv) in b {
+        match e.get(k) {
+            None => {
+                out.insert(k.clone(), Value::Null);
+            }
+            Some(ev) if bv != ev => {
+                let sub = merge_patch_diff(bv, ev);
+                let vacuous = sub.as_object().is_some_and(Map::is_empty) && bv.is_object();
+                if !vacuous {
+                    out.insert(k.clone(), sub);
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    for (k, ev) in e {
+        if !b.contains_key(k) {
+            out.insert(k.clone(), ev.clone());
+        }
+    }
+    Value::Object(out)
+}
+
+/// Leaf paths a merge patch touches; descent stops at anything but a non-empty
+/// object, so a replaced array or a deletion yields the path of the key itself.
+pub fn patch_paths(patch: &Value) -> Vec<Vec<String>> {
+    fn walk(v: &Value, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+        match v {
+            Value::Object(m) if !m.is_empty() => {
+                for (k, sub) in m {
+                    prefix.push(k.clone());
+                    walk(sub, prefix, out);
+                    prefix.pop();
+                }
+            }
+            _ => out.push(prefix.clone()),
+        }
+    }
+    let mut out = Vec::new();
+    if patch.as_object().is_some_and(Map::is_empty) {
+        return out;
+    }
+    walk(patch, &mut Vec::new(), &mut out);
+    out
+}
+
+fn value_at<'a>(v: &'a Value, path: &[String]) -> Option<&'a Value> {
+    let mut cur = v;
+    for k in path {
+        cur = cur.as_object()?.get(k)?;
+    }
+    Some(cur)
+}
+
+/// Drop from a patch the fields the server owns; kxs must never send them.
+fn strip_server_fields(patch: &mut Value) {
+    let Some(obj) = patch.as_object_mut() else {
+        return;
+    };
+    obj.remove("status");
+    let md_empty = match obj.get_mut("metadata").and_then(Value::as_object_mut) {
+        Some(md) => {
+            for k in [
+                "resourceVersion",
+                "uid",
+                "generation",
+                "creationTimestamp",
+                "managedFields",
+            ] {
+                md.remove(k);
+            }
+            md.is_empty()
+        }
+        None => false,
+    };
+    if md_empty {
+        obj.remove("metadata");
+    }
+}
+
+fn identity_of(
+    v: &Value,
+) -> (
+    Option<&Value>,
+    Option<&Value>,
+    Option<&Value>,
+    Option<&Value>,
+) {
+    (
+        v.get("apiVersion"),
+        v.get("kind"),
+        value_at(v, &["metadata".into(), "name".into()]),
+        value_at(v, &["metadata".into(), "namespace".into()]),
+    )
+}
+
+/// Apply an edit the way `kubectl edit` does: diff the user's edit against the
+/// document they opened and send only that as a merge patch, so kxs neither
+/// resends `resourceVersion` (which SSA treats as a precondition and controllers
+/// invalidate constantly) nor steals field ownership from Helm/ArgoCD.
+///
+/// Returns the fresh server YAML after a real apply, or `None` when nothing was
+/// written (dry run, or an edit that changed nothing).
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_edit(
+    client: Client,
+    group: &str,
+    version: &str,
+    kind: &str,
+    plural: &str,
+    namespace: Option<&str>,
+    name: &str,
+    base_yaml: &str,
+    edited_yaml: &str,
+    dry_run: bool,
+) -> Result<Option<String>, String> {
+    let base: Value = serde_yaml_ng::from_str(base_yaml).map_err(|e| e.to_string())?;
+    let edited: Value = serde_yaml_ng::from_str(edited_yaml).map_err(|e| e.to_string())?;
+    if identity_of(&base) != identity_of(&edited) {
+        return Err("apiVersion/kind/name/namespace cannot be changed in the editor".into());
+    }
+
+    let mut patch = merge_patch_diff(&base, &edited);
+    strip_server_fields(&mut patch);
+    let paths = patch_paths(&patch);
+    if paths.is_empty() {
+        return Ok(None);
+    }
+
+    let ar = api_resource(group, version, kind, plural);
+    let api = dyn_api(client.clone(), &ar, namespace);
+    let latest = serde_json::to_value(api.get(name).await.map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let stale: Vec<String> = paths
+        .iter()
+        .filter(|p| value_at(&base, p) != value_at(&latest, p))
+        .map(|p| p.join("."))
+        .collect();
+    if !stale.is_empty() {
+        return Err(format!(
+            "conflict: {} changed on the server since you opened the editor; reload and re-apply",
+            stale.join(", ")
+        ));
+    }
+
+    let pp = PatchParams {
+        field_manager: Some("kxs".into()),
+        dry_run,
+        ..Default::default()
+    };
+    api.patch(name, &pp, &Patch::Merge(&patch))
+        .await
+        .map_err(|e| e.to_string())?;
+    if dry_run {
+        return Ok(None);
+    }
+    crate::resources::get_yaml(client, group, version, kind, plural, namespace, name)
+        .await
+        .map(Some)
 }
 
 /// DeleteParams for the given propagation policy name and force flag.
@@ -237,6 +406,106 @@ mod tests {
             cordon_patch(false),
             serde_json::json!({"spec": {"unschedulable": false}})
         );
+    }
+
+    #[test]
+    fn diff_of_identical_docs_is_empty() {
+        let v = json!({"spec": {"replicas": 2}, "metadata": {"name": "web"}});
+        assert_eq!(merge_patch_diff(&v, &v), json!({}));
+        assert!(patch_paths(&merge_patch_diff(&v, &v)).is_empty());
+    }
+
+    #[test]
+    fn diff_emits_only_changed_scalar() {
+        let base = json!({"spec": {"replicas": 2, "paused": false}});
+        let edited = json!({"spec": {"replicas": 5, "paused": false}});
+        assert_eq!(
+            merge_patch_diff(&base, &edited),
+            json!({"spec": {"replicas": 5}})
+        );
+    }
+
+    #[test]
+    fn diff_nulls_removed_keys() {
+        let base = json!({"metadata": {"labels": {"a": "1", "b": "2"}}});
+        let edited = json!({"metadata": {"labels": {"a": "1"}}});
+        assert_eq!(
+            merge_patch_diff(&base, &edited),
+            json!({"metadata": {"labels": {"b": null}}})
+        );
+    }
+
+    #[test]
+    fn diff_recurses_into_nested_objects_and_adds_keys() {
+        let base = json!({"spec": {"template": {"spec": {"nodeName": "n1"}}}});
+        let edited =
+            json!({"spec": {"template": {"spec": {"nodeName": "n2"}}}, "spec2": {"x": true}});
+        assert_eq!(
+            merge_patch_diff(&base, &edited),
+            json!({"spec": {"template": {"spec": {"nodeName": "n2"}}}, "spec2": {"x": true}})
+        );
+    }
+
+    #[test]
+    fn diff_replaces_whole_list() {
+        let base = json!({"spec": {"ports": [{"port": 80}, {"port": 443}]}});
+        let edited = json!({"spec": {"ports": [{"port": 8080}]}});
+        assert_eq!(
+            merge_patch_diff(&base, &edited),
+            json!({"spec": {"ports": [{"port": 8080}]}})
+        );
+    }
+
+    #[test]
+    fn patch_paths_lists_touched_leaves() {
+        let patch = json!({
+            "spec": {"replicas": 3, "ports": [1, 2]},
+            "metadata": {"labels": {"gone": null}},
+        });
+        let mut got = patch_paths(&patch);
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                vec!["metadata", "labels", "gone"],
+                vec!["spec", "ports"],
+                vec!["spec", "replicas"],
+            ]
+        );
+        assert!(patch_paths(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn strip_server_fields_prunes_empty_metadata() {
+        let mut p = json!({
+            "status": {"replicas": 1},
+            "metadata": {"resourceVersion": "1", "uid": "u", "generation": 2,
+                         "creationTimestamp": "t", "managedFields": []},
+            "spec": {"replicas": 3},
+        });
+        strip_server_fields(&mut p);
+        assert_eq!(p, json!({"spec": {"replicas": 3}}));
+    }
+
+    #[tokio::test]
+    async fn apply_edit_rejects_identity_changes() {
+        let base = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n  namespace: n\n";
+        let edited = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: b\n  namespace: n\n";
+        let err = apply_edit(
+            Client::try_from(kube::Config::new("http://127.0.0.1:1".parse().unwrap())).unwrap(),
+            "",
+            "v1",
+            "ConfigMap",
+            "configmaps",
+            Some("n"),
+            "a",
+            base,
+            edited,
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("cannot be changed"), "{err}");
     }
 
     #[test]
@@ -490,6 +759,259 @@ mod tests {
             false,
         )
         .await;
+    }
+
+    /// A clean namespace for an e2e test: residue from an aborted run, or a
+    /// namespace still terminating, makes a plain create fail.
+    async fn fresh_namespace(client: &Client, name: &str) {
+        use k8s_openapi::api::core::v1::Namespace;
+        let api: Api<Namespace> = Api::all(client.clone());
+        let _ = api.delete(name, &DeleteParams::default()).await;
+        for _ in 0..120 {
+            match api.get_opt(name).await {
+                Ok(None) => break,
+                _ => tokio::time::sleep(std::time::Duration::from_millis(500)).await,
+            }
+        }
+        let ns: Namespace = serde_json::from_value(json!({"metadata": {"name": name}})).unwrap();
+        api.create(&kube::api::PostParams::default(), &ns)
+            .await
+            .expect("create test namespace");
+    }
+
+    async fn edit_fixture(ns: &str) -> (crate::session::ClusterSession, String) {
+        use k8s_openapi::api::core::v1::ConfigMap;
+        let s = kind_session().await;
+        fresh_namespace(&s.client, ns).await;
+        let api: Api<ConfigMap> = Api::namespaced(s.client.clone(), ns);
+        let cm: ConfigMap = serde_json::from_value(json!({
+            "metadata": {"name": "kxs-edit", "namespace": ns},
+            "data": {"a": "1", "b": "2"},
+        }))
+        .unwrap();
+        api.create(&kube::api::PostParams::default(), &cm)
+            .await
+            .unwrap();
+        let base = cm_yaml(&s.client, ns).await;
+        (s, base)
+    }
+
+    async fn cm_yaml(client: &Client, ns: &str) -> String {
+        crate::resources::get_yaml(
+            client.clone(),
+            "",
+            "v1",
+            "ConfigMap",
+            "configmaps",
+            Some(ns),
+            "kxs-edit",
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn cm_object(client: &Client, ns: &str) -> DynamicObject {
+        dyn_api(
+            client.clone(),
+            &api_resource("", "v1", "ConfigMap", "configmaps"),
+            Some(ns),
+        )
+        .get("kxs-edit")
+        .await
+        .unwrap()
+    }
+
+    /// The editor's view of a `data` edit: set a key, or `None` to delete it.
+    fn with_data(yaml: &str, key: &str, value: Option<&str>) -> String {
+        let mut v: Value = serde_yaml_ng::from_str(yaml).unwrap();
+        let data = v.get_mut("data").unwrap().as_object_mut().unwrap();
+        match value {
+            Some(s) => data.insert(key.into(), json!(s)),
+            None => data.remove(key),
+        };
+        serde_yaml_ng::to_string(&v).unwrap()
+    }
+
+    async fn apply_edited(
+        s: &crate::session::ClusterSession,
+        ns: &str,
+        base: &str,
+        edited: &str,
+    ) -> Result<Option<String>, String> {
+        apply_edit(
+            s.client.clone(),
+            "",
+            "v1",
+            "ConfigMap",
+            "configmaps",
+            Some(ns),
+            "kxs-edit",
+            base,
+            edited,
+            false,
+        )
+        .await
+    }
+
+    async fn drop_namespace(client: &Client, ns: &str) {
+        let _ = delete_resource(
+            client.clone(),
+            "",
+            "v1",
+            "Namespace",
+            "namespaces",
+            None,
+            ns,
+            None,
+            false,
+        )
+        .await;
+    }
+
+    /// The 409 regression: an out-of-band write bumps resourceVersion without
+    /// touching what the user edited. Full-object SSA rejects the now-stale
+    /// manifest; the merge-patch diff applies cleanly.
+    #[tokio::test]
+    #[ignore]
+    async fn edit_survives_out_of_band_resource_version_bump() {
+        const NS: &str = "kxs-e2e-edit409-rv";
+        let (s, base) = edit_fixture(NS).await;
+
+        merge_patch(
+            s.client.clone(),
+            "",
+            "v1",
+            "ConfigMap",
+            "configmaps",
+            Some(NS),
+            "kxs-edit",
+            json!({"metadata": {"annotations": {"kxs.test/oob": "1"}}}),
+        )
+        .await
+        .unwrap();
+
+        let stale_ssa = apply_yaml(
+            s.client.clone(),
+            "",
+            "v1",
+            "ConfigMap",
+            "configmaps",
+            Some(NS),
+            "kxs-edit",
+            &base,
+            false,
+        )
+        .await;
+        assert!(
+            stale_ssa.is_err(),
+            "full-object SSA is expected to reject the stale resourceVersion"
+        );
+
+        let fresh = apply_edited(&s, NS, &base, &with_data(&base, "a", Some("9")))
+            .await
+            .unwrap()
+            .expect("a real apply returns fresh YAML");
+        let got: Value = serde_yaml_ng::from_str(&fresh).unwrap();
+        assert_eq!(got["data"]["a"], json!("9"));
+        assert_eq!(got["data"]["b"], json!("2"));
+        assert_eq!(
+            got["metadata"]["annotations"]["kxs.test/oob"],
+            json!("1"),
+            "the out-of-band write must survive the edit"
+        );
+
+        drop_namespace(&s.client, NS).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn concurrent_change_to_edited_field_is_a_conflict() {
+        const NS: &str = "kxs-e2e-edit409-conflict";
+        let (s, base) = edit_fixture(NS).await;
+
+        merge_patch(
+            s.client.clone(),
+            "",
+            "v1",
+            "ConfigMap",
+            "configmaps",
+            Some(NS),
+            "kxs-edit",
+            json!({"data": {"a": "someone-else"}}),
+        )
+        .await
+        .unwrap();
+
+        let err = apply_edited(&s, NS, &base, &with_data(&base, "a", Some("9")))
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("conflict: data.a "), "{err}");
+        let latest = cm_object(&s.client, NS).await;
+        assert_eq!(latest.data["data"]["a"], json!("someone-else"));
+
+        drop_namespace(&s.client, NS).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn deleting_a_field_in_the_editor_deletes_it_on_the_server() {
+        const NS: &str = "kxs-e2e-edit409-delete";
+        let (s, base) = edit_fixture(NS).await;
+
+        apply_edited(&s, NS, &base, &with_data(&base, "b", None))
+            .await
+            .unwrap()
+            .unwrap();
+        let latest = cm_object(&s.client, NS).await;
+        assert_eq!(latest.data["data"]["a"], json!("1"));
+        assert!(
+            latest.data["data"].get("b").is_none(),
+            "data.b should be gone: {}",
+            latest.data["data"]
+        );
+
+        drop_namespace(&s.client, NS).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn no_op_edit_does_not_write() {
+        const NS: &str = "kxs-e2e-edit409-noop";
+        let (s, base) = edit_fixture(NS).await;
+
+        let before = cm_object(&s.client, NS).await.metadata.resource_version;
+        assert_eq!(apply_edited(&s, NS, &base, &base).await.unwrap(), None);
+        let after = cm_object(&s.client, NS).await.metadata.resource_version;
+        assert_eq!(before, after, "a no-op edit must not write");
+
+        drop_namespace(&s.client, NS).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn apply_claims_only_the_edited_fields() {
+        const NS: &str = "kxs-e2e-edit409-managed";
+        let (s, base) = edit_fixture(NS).await;
+
+        apply_edited(&s, NS, &base, &with_data(&base, "a", Some("9")))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let latest = cm_object(&s.client, NS).await;
+        let entry = latest
+            .metadata
+            .managed_fields
+            .unwrap_or_default()
+            .into_iter()
+            .find(|e| e.manager.as_deref() == Some("kxs"))
+            .expect("kxs managed-fields entry");
+        assert_eq!(entry.operation.as_deref(), Some("Update"));
+        let fields = serde_json::to_string(&entry.fields_v1).unwrap();
+        assert!(fields.contains("f:a"), "{fields}");
+        assert!(!fields.contains("f:b"), "{fields}");
+
+        drop_namespace(&s.client, NS).await;
     }
 
     #[tokio::test]
