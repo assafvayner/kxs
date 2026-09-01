@@ -6,6 +6,7 @@ pub mod logs;
 pub mod metrics;
 pub mod pods;
 pub mod portforward;
+pub mod quantity;
 pub mod resources;
 pub mod session;
 pub mod workloads;

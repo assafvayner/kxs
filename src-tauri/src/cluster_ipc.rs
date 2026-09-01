@@ -815,3 +815,12 @@ pub async fn pod_metrics(
     let client = session_of(&sessions, tab_id).await?.client.clone();
     kxs_cluster::metrics::pod_metrics(client, namespace.as_deref()).await
 }
+
+#[tauri::command]
+pub async fn node_metrics(
+    tab_id: u32,
+    sessions: State<'_, Sessions>,
+) -> Result<Vec<kxs_cluster::metrics::NodeMetricsRow>, String> {
+    let client = session_of(&sessions, tab_id).await?.client.clone();
+    kxs_cluster::metrics::node_metrics(client).await
+}

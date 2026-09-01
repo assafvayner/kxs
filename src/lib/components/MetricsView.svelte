@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { api, type MetricsRow } from "../api";
+  import { api, type MetricsRow, type NodeMetricsRow } from "../api";
   import { matchRow } from "../command";
+  import { ofTotal } from "../utilization";
   import type { TabSession } from "../stores/sessions.svelte";
   import VirtualList from "./VirtualList.svelte";
 
   let { tabId, session }: { tabId: number; session: TabSession } = $props();
 
   let rows = $state<MetricsRow[]>([]);
+  let nodes = $state<NodeMetricsRow[]>([]);
   let error = $state<string | null>(null);
   let loading = $state(true);
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -23,6 +25,12 @@
     } finally {
       loading = false;
     }
+    // Node metrics are cluster-scoped; a failure here must not hide the pods.
+    try {
+      nodes = await api.nodeMetrics(tabId);
+    } catch {
+      nodes = [];
+    }
   }
 
   onMount(() => {
@@ -35,18 +43,35 @@
   $effect(() => {
     refresh();
   });
+
+  const NODE_COLS = "grid-template-columns: 2.5fr 1.5fr 1.5fr;";
+  const POD_COLS = "grid-template-columns: 1.5fr 2.5fr 1fr 1fr;";
 </script>
 
 <div class="rtable">
   {#if error}
     <div class="connect-error"><pre class="mono">{error}</pre></div>
   {:else}
-    <div class="rtable-head" style="grid-template-columns: 1.5fr 2.5fr 1fr 1fr;">
+    {#if nodes.length > 0}
+      <div class="rtable-head" style={NODE_COLS}>
+        <span>Node</span><span>CPU</span><span>Mem</span>
+      </div>
+      {#each nodes as n (n.name)}
+        {@const cpu = ofTotal(n.cpuMillicores, n.cpuAllocatableMillicores, "m")}
+        {@const mem = ofTotal(n.memMib, n.memAllocatableMib, "Mi")}
+        <div class="rtable-row" style={NODE_COLS}>
+          <span>{n.name}</span>
+          <span class={cpu.cls}>{cpu.text}</span>
+          <span class={mem.cls}>{mem.text}</span>
+        </div>
+      {/each}
+    {/if}
+    <div class="rtable-head" style={POD_COLS}>
       <span>Namespace</span><span>Pod</span><span>CPU (m)</span><span>Mem (Mi)</span>
     </div>
     <VirtualList items={visible} itemHeight={28}>
       {#snippet row(r: MetricsRow)}
-        <div class="rtable-row" style="grid-template-columns: 1.5fr 2.5fr 1fr 1fr;">
+        <div class="rtable-row" style={POD_COLS}>
           <span class="dim">{r.namespace ?? "—"}</span>
           <span>{r.name}</span>
           <span>{r.cpuMillicores}</span>

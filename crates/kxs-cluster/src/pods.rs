@@ -20,6 +20,32 @@ pub struct PodRow {
     pub node: Option<String>,
     /// RFC3339; age is rendered client-side so it can tick.
     pub created: Option<String>,
+    /// Summed container requests; `None` when no container sets one, so the UI
+    /// can tell "no request" apart from "requests zero".
+    pub cpu_request_millis: Option<i64>,
+    pub mem_request_mib: Option<i64>,
+}
+
+/// Sums a resource request across the pod's containers. `None` when no
+/// container declares it (or none parses).
+fn sum_requests(pod: &Pod, key: &str, parse: fn(&str) -> Option<i64>) -> Option<i64> {
+    let containers = pod
+        .spec
+        .as_ref()
+        .map(|s| s.containers.as_slice())
+        .unwrap_or_default();
+    let mut total: Option<i64> = None;
+    for c in containers {
+        let q = c
+            .resources
+            .as_ref()
+            .and_then(|r| r.requests.as_ref())
+            .and_then(|m| m.get(key));
+        if let Some(v) = q.and_then(|q| parse(&q.0)) {
+            total = Some(total.unwrap_or(0) + v);
+        }
+    }
+    total
 }
 
 pub fn pod_key(pod: &Pod) -> String {
@@ -124,6 +150,8 @@ pub fn pod_row(pod: &Pod) -> PodRow {
         ip: status.and_then(|s| s.pod_ip.clone()),
         node: pod.spec.as_ref().and_then(|s| s.node_name.clone()),
         created: meta.creation_timestamp.as_ref().map(|t| t.0.to_rfc3339()),
+        cpu_request_millis: sum_requests(pod, "cpu", crate::quantity::cpu_millis),
+        mem_request_mib: sum_requests(pod, "memory", crate::quantity::mem_mib),
     }
 }
 
@@ -337,6 +365,50 @@ mod tests {
         assert_eq!(r.ip.as_deref(), Some("10.0.0.5"));
         assert_eq!(r.node.as_deref(), Some("node-1"));
         assert_eq!(r.created.as_deref(), Some("2026-07-01T00:00:00+00:00"));
+        assert_eq!(r.cpu_request_millis, None);
+        assert_eq!(r.mem_request_mib, None);
+    }
+
+    #[test]
+    fn sums_container_requests() {
+        let p = pod(serde_json::json!({
+            "metadata": {"name": "x", "namespace": "d"},
+            "spec": {"containers": [
+                {"name": "a", "resources": {"requests": {"cpu": "250m", "memory": "128Mi"}}},
+                {"name": "b", "resources": {"requests": {"cpu": "1", "memory": "1Gi"}}}
+            ]}
+        }));
+        let r = pod_row(&p);
+        assert_eq!(r.cpu_request_millis, Some(1250));
+        assert_eq!(r.mem_request_mib, Some(1152));
+    }
+
+    #[test]
+    fn partial_and_absent_requests() {
+        let p = pod(serde_json::json!({
+            "metadata": {"name": "x", "namespace": "d"},
+            "spec": {"containers": [
+                {"name": "a", "resources": {"requests": {"memory": "512M"}}},
+                {"name": "b", "resources": {"limits": {"cpu": "2"}}},
+                {"name": "c"}
+            ]}
+        }));
+        let r = pod_row(&p);
+        assert_eq!(r.cpu_request_millis, None, "limits are not requests");
+        assert_eq!(r.mem_request_mib, Some(488));
+    }
+
+    #[test]
+    fn zero_request_is_some_zero() {
+        let p = pod(serde_json::json!({
+            "metadata": {"name": "x", "namespace": "d"},
+            "spec": {"containers": [
+                {"name": "a", "resources": {"requests": {"cpu": "0", "memory": "0"}}}
+            ]}
+        }));
+        let r = pod_row(&p);
+        assert_eq!(r.cpu_request_millis, Some(0));
+        assert_eq!(r.mem_request_mib, Some(0));
     }
 
     #[test]
@@ -516,6 +588,8 @@ mod tests {
             ip: None,
             node: None,
             created: None,
+            cpu_request_millis: None,
+            mem_request_mib: None,
         }
     }
 

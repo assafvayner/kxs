@@ -1,52 +1,26 @@
+use k8s_openapi::api::core::v1::Node;
 use kube::api::{Api, DynamicObject, ListParams};
 use kube::core::{ApiResource, GroupVersionKind};
 use kube::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Parses a Kubernetes CPU quantity (e.g. "100m", "1", "2500000000n") into
-/// millicores. Unparseable input yields 0.
+/// millicores. Unparseable or negative input yields 0.
 pub fn cpu_millicores(q: &str) -> u64 {
-    let q = q.trim();
-    if q.is_empty() {
-        return 0;
-    }
-    if let Some(n) = q.strip_suffix('n') {
-        return n.parse::<u64>().unwrap_or(0) / 1_000_000;
-    }
-    if let Some(u) = q.strip_suffix('u') {
-        return u.parse::<u64>().unwrap_or(0) / 1_000;
-    }
-    if let Some(m) = q.strip_suffix('m') {
-        return m.parse::<u64>().unwrap_or(0);
-    }
-    // cores -> millicores
-    q.parse::<f64>().map(|c| (c * 1000.0) as u64).unwrap_or(0)
+    crate::quantity::cpu_millis(q)
+        .unwrap_or(0)
+        .try_into()
+        .unwrap_or(0)
 }
 
 /// Parses a Kubernetes memory quantity (e.g. "128Mi", "1Gi", bytes) into
-/// mebibytes. Unparseable input yields 0.
+/// mebibytes. Unparseable or negative input yields 0.
 pub fn mem_mib(q: &str) -> u64 {
-    let q = q.trim();
-    if q.is_empty() {
-        return 0;
-    }
-    if let Some(n) = q.strip_suffix("Ki") {
-        return n.parse::<u64>().unwrap_or(0) / 1024;
-    }
-    if let Some(n) = q.strip_suffix("Mi") {
-        return n.parse::<u64>().unwrap_or(0);
-    }
-    if let Some(n) = q.strip_suffix("Gi") {
-        return n.parse::<f64>().map(|g| (g * 1024.0) as u64).unwrap_or(0);
-    }
-    if let Some(n) = q.strip_suffix("Ti") {
-        return n
-            .parse::<f64>()
-            .map(|t| (t * 1024.0 * 1024.0) as u64)
-            .unwrap_or(0);
-    }
-    // bytes
-    q.parse::<u64>().unwrap_or(0) / (1024 * 1024)
+    crate::quantity::mem_mib(q)
+        .unwrap_or(0)
+        .try_into()
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,22 +112,110 @@ pub async fn pod_metrics(
             rows.sort_by(|a, b| a.key.cmp(&b.key));
             Ok(rows)
         }
-        // metrics-server absent: the metrics.k8s.io group/resource itself is
-        // unregistered, which the apiserver reports as a 404 ErrorResponse
-        // (kube::Error::Api(ErrorResponse { code, .. }), code is a u16).
-        Err(kube::Error::Api(ae)) if ae.code == 404 => Ok(Vec::new()),
-        Err(e) => {
-            // Belt-and-suspenders: some clusters/proxies surface the missing
-            // API group as a different error shape (e.g. a transport-level
-            // ServiceUnavailable) rather than a clean 404 ErrorResponse.
-            let s = e.to_string();
-            if s.contains("404") || s.contains("NotFound") || s.contains("ServiceUnavailable") {
-                Ok(Vec::new())
-            } else {
-                Err(s)
-            }
+        Err(e) => empty_if_metrics_absent(e),
+    }
+}
+
+/// metrics-server absent: the metrics.k8s.io group/resource itself is
+/// unregistered, which the apiserver reports as a 404 ErrorResponse
+/// (kube::Error::Api(ErrorResponse { code, .. }), code is a u16). Belt-and-
+/// suspenders: some clusters/proxies surface the missing API group as a
+/// different error shape (e.g. a transport-level ServiceUnavailable) rather
+/// than a clean 404 ErrorResponse.
+fn empty_if_metrics_absent<T>(e: kube::Error) -> Result<Vec<T>, String> {
+    if let kube::Error::Api(ae) = &e {
+        if ae.code == 404 {
+            return Ok(Vec::new());
         }
     }
+    let s = e.to_string();
+    if s.contains("404") || s.contains("NotFound") || s.contains("ServiceUnavailable") {
+        Ok(Vec::new())
+    } else {
+        Err(s)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawNodeMetrics {
+    pub metadata: RawMetaName,
+    #[serde(default)]
+    pub usage: RawUsage,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeMetricsRow {
+    pub name: String,
+    pub cpu_millicores: u64,
+    /// `None` when the node's allocatable capacity could not be read, so the
+    /// UI omits the percentage instead of showing a bogus one.
+    pub cpu_allocatable_millicores: Option<u64>,
+    pub mem_mib: u64,
+    pub mem_allocatable_mib: Option<u64>,
+}
+
+/// Node allocatable CPU (millicores) / memory (MiB) keyed by node name.
+/// Failures degrade to an empty map: usage still renders, percentages don't.
+async fn node_allocatable(client: Client) -> BTreeMap<String, (Option<u64>, Option<u64>)> {
+    let api: Api<Node> = Api::all(client);
+    let Ok(list) = api.list(&ListParams::default()).await else {
+        return BTreeMap::new();
+    };
+    list.items
+        .into_iter()
+        .filter_map(|n| {
+            let name = n.metadata.name?;
+            let alloc = n.status.and_then(|s| s.allocatable);
+            let get = |key: &str| {
+                alloc
+                    .as_ref()
+                    .and_then(|a| a.get(key))
+                    .map(|q| q.0.as_str())
+            };
+            Some((
+                name,
+                (get("cpu").map(cpu_millicores), get("memory").map(mem_mib)),
+            ))
+        })
+        .collect()
+}
+
+/// List node usage via metrics.k8s.io, joined with Node allocatable. Returns
+/// empty (not error) when metrics-server is absent, like [`pod_metrics`].
+pub async fn node_metrics(client: Client) -> Result<Vec<NodeMetricsRow>, String> {
+    let ar = ApiResource::from_gvk(&GroupVersionKind {
+        group: "metrics.k8s.io".into(),
+        version: "v1beta1".into(),
+        kind: "NodeMetrics".into(),
+    });
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
+    let list = match api.list(&ListParams::default()).await {
+        Ok(list) => list,
+        Err(e) => return empty_if_metrics_absent(e),
+    };
+    if list.items.is_empty() {
+        return Ok(Vec::new());
+    }
+    let allocatable = node_allocatable(client).await;
+    let mut rows = Vec::new();
+    for obj in list.items {
+        let v = serde_json::to_value(&obj).map_err(|e| e.to_string())?;
+        let Ok(nm) = serde_json::from_value::<RawNodeMetrics>(v) else {
+            continue;
+        };
+        let name = nm.metadata.name.unwrap_or_default();
+        let (cpu_alloc, mem_alloc) = allocatable.get(&name).copied().unwrap_or((None, None));
+        rows.push(NodeMetricsRow {
+            name,
+            cpu_millicores: cpu_millicores(&nm.usage.cpu),
+            cpu_allocatable_millicores: cpu_alloc,
+            mem_mib: mem_mib(&nm.usage.memory),
+            mem_allocatable_mib: mem_alloc,
+        });
+    }
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -234,6 +296,34 @@ mod tests {
             for row in &rows {
                 assert!(!row.key.is_empty());
                 assert!(!row.name.is_empty());
+            }
+        }
+    }
+
+    /// Same contract as the pod_metrics test above: run manually against
+    /// kind-local, must never return an `Err`.
+    #[tokio::test]
+    #[ignore]
+    async fn node_metrics_degrades_gracefully_without_metrics_server() {
+        let session = kind_session().await;
+        let rows = node_metrics(session.client.clone())
+            .await
+            .expect("node_metrics must not error even when metrics-server is absent");
+
+        if rows.is_empty() {
+            eprintln!(
+                "node_metrics: no metrics-server present, got empty rows (expected on kind-local)"
+            );
+        } else {
+            eprintln!(
+                "node_metrics: metrics-server present, got {} rows",
+                rows.len()
+            );
+            for row in &rows {
+                assert!(!row.name.is_empty());
+                if let Some(alloc) = row.cpu_allocatable_millicores {
+                    assert!(alloc > 0, "allocatable cpu should be positive when known");
+                }
             }
         }
     }

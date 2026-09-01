@@ -84,6 +84,9 @@ export interface PodRow {
   ip: string | null;
   node: string | null;
   created: string | null;
+  /** Summed container requests; null when no container sets one. */
+  cpuRequestMillis: number | null;
+  memRequestMib: number | null;
 }
 
 export type PodEvent =
@@ -191,6 +194,14 @@ export interface MetricsRow {
   namespace: string | null;
   cpuMillicores: number;
   memMib: number;
+}
+
+export interface NodeMetricsRow {
+  name: string;
+  cpuMillicores: number;
+  cpuAllocatableMillicores: number | null;
+  memMib: number;
+  memAllocatableMib: number | null;
 }
 
 export type PropagationPolicy = "Background" | "Foreground" | "Orphan";
@@ -381,6 +392,7 @@ export const api = {
   listForwards: (tabId: number) => invoke<ForwardInfo[]>("list_forwards", { tabId }),
   podMetrics: (tabId: number, namespace: string | null) =>
     invoke<MetricsRow[]>("pod_metrics", { tabId, namespace }),
+  nodeMetrics: (tabId: number) => invoke<NodeMetricsRow[]>("node_metrics", { tabId }),
   listWorkloadPods: (tabId: number, k: ResourceKind, namespace: string, name: string) =>
     invoke<string[]>("list_workload_pods", {
       tabId,

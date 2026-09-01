@@ -12,6 +12,8 @@ const row = (key: string, status = "Running"): PodRow => ({
   ip: null,
   node: null,
   created: null,
+  cpuRequestMillis: null,
+  memRequestMib: null,
 });
 
 describe("PodTable", () => {

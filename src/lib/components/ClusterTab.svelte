@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "../api";
-  import type { DeleteOptions, PodRow, ResourceKind } from "../api";
+  import type { DeleteOptions, MetricsRow, PodRow, ResourceKind } from "../api";
+  import { cpuUtil, memUtil } from "../utilization";
   import { copyText } from "../clipboard";
   import { sessions, TabSession } from "../stores/sessions.svelte";
   import type { View } from "../stores/viewstack.svelte";
@@ -159,6 +160,45 @@
   // here; ResourceTableView does the same for resource views.
   $effect(() => {
     if (s.views.top.kind === "pods") s.visibleKeys = podsVisible.map((p) => p.key);
+  });
+
+  const METRICS_INTERVAL_MS = 15_000;
+  // Clusters without metrics-server would otherwise be polled pointlessly.
+  const METRICS_BACKOFF_MS = 60_000;
+  let podMetrics = $state(new Map<string, MetricsRow>());
+  let metricsAvailable = true;
+  let metricsTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function stopMetrics() {
+    clearTimeout(metricsTimer);
+    metricsTimer = undefined;
+  }
+
+  async function pollMetrics() {
+    if (destroyed || s.views.top.kind !== "pods") return;
+    try {
+      const rows = await api.podMetrics(tabId, s.namespace);
+      podMetrics = new Map(rows.map((r) => [r.key, r]));
+      metricsAvailable = rows.length > 0;
+    } catch {
+      podMetrics = new Map();
+      metricsAvailable = false;
+    }
+    if (destroyed || s.views.top.kind !== "pods") return;
+    stopMetrics();
+    metricsTimer = setTimeout(
+      pollMetrics,
+      metricsAvailable ? METRICS_INTERVAL_MS : METRICS_BACKOFF_MS,
+    );
+  }
+
+  // Poll only while the pods table is the top view; reruns on namespace change.
+  $effect(() => {
+    const active = s.status === "ready" && s.views.top.kind === "pods";
+    void s.namespace;
+    if (!active) return;
+    pollMetrics();
+    return stopMetrics;
   });
 
   function parseSelected(): { namespace: string | null; name: string } | null {
@@ -641,6 +681,7 @@
   });
   onDestroy(() => {
     destroyed = true;
+    stopMetrics();
     clusterKeyHandlers.delete(tabId);
     api.closeSession(tabId).catch(() => {});
     sessions.delete(tabId);
@@ -704,10 +745,14 @@
       <div class="pod-table">
         <div class="pod-row pod-head">
           <span>NAMESPACE</span><span>NAME</span><span>READY</span><span>STATUS</span>
-          <span>RESTARTS</span><span>IP</span><span>NODE</span><span>AGE</span>
+          <span>RESTARTS</span><span>CPU</span><span>MEM</span><span>IP</span><span>NODE</span>
+          <span>AGE</span>
         </div>
         <VirtualList items={podsVisible} itemHeight={28} scrollToIndex={podsSelectedIndex}>
           {#snippet row(pod: PodRow)}
+            {@const m = podMetrics.get(pod.key)}
+            {@const cpu = cpuUtil(m?.cpuMillicores ?? null, pod.cpuRequestMillis)}
+            {@const mem = memUtil(m?.memMib ?? null, pod.memRequestMib)}
             <div
               class="pod-row"
               class:selected={s.selected === pod.key}
@@ -727,6 +772,8 @@
               <span>{pod.ready}</span>
               <span class={statusClass(pod.status)}>{pod.status}</span>
               <span>{pod.restarts}</span>
+              <span class={cpu.cls}>{cpu.text}</span>
+              <span class={mem.cls}>{mem.text}</span>
               <span class="mono dim">{pod.ip ?? "—"}</span>
               <span class="dim">{pod.node ?? "—"}</span>
               <span>{age(pod.created, now.ms)}</span>

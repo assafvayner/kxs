@@ -65,7 +65,8 @@ fn main() {
             cluster_ipc::trigger_cronjob,
             cluster_ipc::suspend_cronjob,
             cluster_ipc::get_config_values,
-            cluster_ipc::pod_metrics
+            cluster_ipc::pod_metrics,
+            cluster_ipc::node_metrics
         ])
         .setup(move |app| {
             watcher::spawn(app.handle().clone(), paths);

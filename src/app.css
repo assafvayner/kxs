@@ -78,7 +78,7 @@ tr.clickable:hover td { background: var(--bg-hover); }
 .pod-table { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .pod-row {
   display: grid;
-  grid-template-columns: 1.2fr 2.4fr 0.6fr 1.2fr 0.7fr 1fr 1.2fr 0.7fr;
+  grid-template-columns: 1.2fr 2.4fr 0.6fr 1.2fr 0.7fr 0.9fr 0.9fr 1fr 1.2fr 0.7fr;
   gap: 8px; align-items: center; height: 28px; padding: 0 16px;
   font-size: 13px; white-space: nowrap; overflow: hidden;
 }
@@ -116,7 +116,8 @@ tr.clickable:hover td { background: var(--bg-hover); }
 .ping-btn:hover { color: var(--accent); background: none; border: none; }
 .vlist { overflow-y: auto; height: 100%; }
 .rtable { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.rtable-head, .rtable-row { display: grid; gap: 8px; padding: 0 16px; align-items: center; height: 28px; font-size: 13px; white-space: nowrap; }
+/* flex: none keeps the head/node rows at full height beside the flexible .vlist */
+.rtable-head, .rtable-row { display: grid; flex: none; gap: 8px; padding: 0 16px; align-items: center; height: 28px; font-size: 13px; white-space: nowrap; }
 .rtable-head { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; font-weight: 600; border-bottom: 1px solid var(--border); }
 .rtable-row > span, .rtable-head > span { overflow: hidden; text-overflow: ellipsis; }
 .rtable-row { cursor: pointer; }
