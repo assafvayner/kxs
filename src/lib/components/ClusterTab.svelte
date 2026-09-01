@@ -46,6 +46,7 @@
   import TerminalView from "./TerminalView.svelte";
   import ForwardsView from "./ForwardsView.svelte";
   import MetricsView from "./MetricsView.svelte";
+  import EventsView from "./EventsView.svelte";
   import RolloutView from "./RolloutView.svelte";
   import ValuesView from "./ValuesView.svelte";
 
@@ -245,6 +246,8 @@
         return "port-forwards";
       case "metrics":
         return "metrics";
+      case "events":
+        return "events";
       case "rollout":
         return `rollout: ${v.name}`;
       case "values":
@@ -827,6 +830,8 @@
       <ForwardsView {tabId} session={s} />
     {:else if s.views.top.kind === "metrics"}
       <MetricsView {tabId} session={s} />
+    {:else if s.views.top.kind === "events"}
+      <EventsView {tabId} session={s} />
     {:else if s.views.top.kind === "rollout"}
       <RolloutView
         {tabId}
@@ -868,6 +873,8 @@
           forwards: () => pushView({ kind: "forwards" }),
           top: () => pushView({ kind: "metrics" }),
           metrics: () => pushView({ kind: "metrics" }),
+          ev: () => pushView({ kind: "events" }),
+          events: () => pushView({ kind: "events" }),
         }} />
     {/if}
 

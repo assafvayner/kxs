@@ -10,6 +10,7 @@ export type View =
   | { kind: "exec"; namespace: string; pod: string; container: string | null }
   | { kind: "forwards" }
   | { kind: "metrics" }
+  | { kind: "events" }
   | { kind: "rollout"; namespace: string; name: string }
   | { kind: "values"; title: string; resourceKind: ResourceKind; namespace: string; name: string };
 

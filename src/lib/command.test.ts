@@ -128,5 +128,6 @@ describe("searchEnabled", () => {
     expect(searchEnabled({ kind: "logs", namespace: "default", pods: ["p"], label: "p" })).toBe(true);
     expect(searchEnabled({ kind: "metrics" })).toBe(true);
     expect(searchEnabled({ kind: "forwards" })).toBe(true);
+    expect(searchEnabled({ kind: "events" })).toBe(true);
   });
 });
