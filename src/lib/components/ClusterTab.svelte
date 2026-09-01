@@ -32,6 +32,7 @@
     type PickOption,
     type PortChoice,
   } from "../containers";
+  import { ColumnWidths, startColumnDrag } from "../columnResize.svelte";
   import VirtualList from "./VirtualList.svelte";
   import ContextMenu from "./ContextMenu.svelte";
   import PickList from "./PickList.svelte";
@@ -160,18 +161,22 @@
 
   /** PodRow fields plus the metrics-backed CPU/MEM columns. */
   type PodColumn = PodField | "cpu" | "mem";
-  const POD_COLUMNS: [string, PodColumn][] = [
-    ["NAMESPACE", "namespace"],
-    ["NAME", "name"],
-    ["READY", "ready"],
-    ["STATUS", "status"],
-    ["RESTARTS", "restarts"],
-    ["CPU", "cpu"],
-    ["MEM", "mem"],
-    ["IP", "ip"],
-    ["NODE", "node"],
-    ["AGE", "age"],
+  const POD_COLUMNS: [string, PodColumn, string][] = [
+    ["NAMESPACE", "namespace", "1.2fr"],
+    ["NAME", "name", "2.4fr"],
+    ["READY", "ready", "0.6fr"],
+    ["STATUS", "status", "1.2fr"],
+    ["RESTARTS", "restarts", "0.7fr"],
+    ["CPU", "cpu", "0.9fr"],
+    ["MEM", "mem", "0.9fr"],
+    ["IP", "ip", "1fr"],
+    ["NODE", "node", "1.2fr"],
+    ["AGE", "age", "0.7fr"],
   ];
+  const POD_COLUMN_DEFAULTS = POD_COLUMNS.map(([, , track]) => track);
+  const podWidths = new ColumnWidths();
+  podWidths.configure("pods", POD_COLUMNS.length);
+  const podTemplate = $derived(podWidths.template(POD_COLUMN_DEFAULTS));
 
   let podSort = $state<Sort<PodColumn> | null>(null);
   /** Label selector actually in effect; only a settled one restarts the watch. */
@@ -799,13 +804,25 @@
 
     {#if s.views.top.kind === "pods"}
       <div class="pod-table">
-        <div class="pod-row pod-head">
-          {#each POD_COLUMNS as [label, field] (field)}<button
-              type="button"
-              class="col-head"
-              onclick={() => (podSort = cycleSort(podSort, field))}
-              >{label}{sortIndicator(podSort, field)}</button
-            >{/each}
+        <div class="pod-row pod-head" style="grid-template-columns: {podTemplate};">
+          {#each POD_COLUMNS as [label, field], i (field)}<div class="col-cell">
+              <button
+                type="button"
+                class="col-head"
+                onclick={() => (podSort = cycleSort(podSort, field))}
+                >{label}{sortIndicator(podSort, field)}</button
+              ><button
+                type="button"
+                class="col-resizer"
+                tabindex="-1"
+                aria-label="Resize {label} column"
+                onpointerdown={(e) =>
+                  startColumnDrag(e, {
+                    onwidth: (w) => podWidths.set(i, w),
+                    oncommit: () => podWidths.persist(),
+                  })}
+                ondblclick={() => podWidths.reset(i)}></button>
+            </div>{/each}
         </div>
         <VirtualList items={podsVisible} itemHeight={28} scrollToIndex={podsSelectedIndex}>
           {#snippet row(pod: PodRow)}
@@ -815,6 +832,7 @@
             <div
               class="pod-row"
               class:selected={s.selected === pod.key}
+              style="grid-template-columns: {podTemplate};"
               role="button"
               tabindex="0"
               onclick={() => (s.selected = pod.key)}

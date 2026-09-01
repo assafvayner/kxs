@@ -6,6 +6,7 @@
   import { age } from "../age";
   import { matchRow, splitFilter } from "../command";
   import { cycleSort, sortIndicator, sortRows, type Sort } from "../sort";
+  import { ColumnWidths, resourceTableId, startColumnDrag } from "../columnResize.svelte";
   import VirtualList from "./VirtualList.svelte";
 
   let {
@@ -104,6 +105,15 @@
     sort = null;
   });
 
+  const DEFAULT_TRACK = "minmax(80px, 1fr)";
+  const columnWidths = new ColumnWidths();
+  const template = $derived(columnWidths.template(columns.map(() => DEFAULT_TRACK)));
+
+  // Rebinds on a kind switch and whenever the served column set changes size.
+  $effect(() => {
+    columnWidths.configure(resourceTableId(resourceKind), columns.length);
+  });
+
   // Typing a selector must not spawn a watch per keystroke.
   $effect(() => {
     const next = filter.labels;
@@ -128,19 +138,29 @@
     {:else if reconnecting}
       <p class="dim pad">Reconnecting…</p>
     {/if}
-    <div class="rtable-head" style="grid-template-columns: repeat({columns.length}, minmax(80px, 1fr));">
-      {#each columns as c, i}<button
-          type="button"
-          class="col-head"
-          onclick={() => (sort = cycleSort(sort, i))}>{c}{sortIndicator(sort, i)}</button
-        >{/each}
+    <div class="rtable-head" style="grid-template-columns: {template};">
+      {#each columns as c, i}<div class="col-cell">
+          <button type="button" class="col-head" onclick={() => (sort = cycleSort(sort, i))}
+            >{c}{sortIndicator(sort, i)}</button
+          ><button
+            type="button"
+            class="col-resizer"
+            tabindex="-1"
+            aria-label="Resize {c} column"
+            onpointerdown={(e) =>
+              startColumnDrag(e, {
+                onwidth: (w) => columnWidths.set(i, w),
+                oncommit: () => columnWidths.persist(),
+              })}
+            ondblclick={() => columnWidths.reset(i)}></button>
+        </div>{/each}
     </div>
     <VirtualList items={visible} itemHeight={28} scrollToIndex={selectedIndex}>
       {#snippet row(r: ResourceRow)}
         <div
           class="rtable-row"
           class:selected={session.selected === r.key}
-          style="grid-template-columns: repeat({columns.length}, minmax(80px, 1fr));"
+          style="grid-template-columns: {template};"
           role="button"
           tabindex="0"
           onclick={() => (session.selected = r.key)}
