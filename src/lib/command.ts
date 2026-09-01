@@ -48,18 +48,26 @@ export function splitFilter(filter: string): { labels: string | null; name: stri
   return { labels: rest.slice(0, i), name: rest.slice(i + 1).trim() };
 }
 
+/** Compile a filter once; returns a predicate with matchRow's semantics. */
+export function filterPredicate(filter: string): (name: string) => boolean {
+  const f = filter.trim();
+  if (!f) return () => true;
+  if (f.startsWith("-r ")) {
+    let re: RegExp;
+    try {
+      re = new RegExp(f.slice(3));
+    } catch {
+      return () => false;
+    }
+    return (name) => re.test(name);
+  }
+  const needle = f.toLowerCase();
+  return (name) => name.toLowerCase().includes(needle);
+}
+
 /** Substring by default; `-r <regex>` for regex. Invalid regex → no match. */
 export function matchRow(name: string, filter: string): boolean {
-  const f = filter.trim();
-  if (!f) return true;
-  if (f.startsWith("-r ")) {
-    try {
-      return new RegExp(f.slice(3)).test(name);
-    } catch {
-      return false;
-    }
-  }
-  return name.toLowerCase().includes(f.toLowerCase());
+  return filterPredicate(filter)(name);
 }
 
 /** Label for the resource switcher: nearest pods/resource view kind from the top, else "Pods". */

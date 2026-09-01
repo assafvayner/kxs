@@ -1,11 +1,11 @@
 <script lang="ts">
   import type { TabSession } from "../stores/sessions.svelte";
-  import YamlHighlightedText from "./YamlHighlightedText.svelte";
+  import CodeEditor from "./CodeEditor.svelte";
 
   let { title, body, session }: { title: string; body: string; session: TabSession } = $props();
 </script>
 
 <div class="detail">
   <div class="detail-bar"><span class="mono">{title}</span></div>
-  <div class="detail-body"><YamlHighlightedText {body} query={session.filter} /></div>
+  <CodeEditor value={body} readOnly filter={session.filter} />
 </div>
