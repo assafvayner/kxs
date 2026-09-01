@@ -6,7 +6,12 @@
   import type { View } from "../stores/viewstack.svelte";
   import { now } from "../stores/now.svelte";
   import { age } from "../age";
-  import { handleClusterKey, clusterKeyHandlers, type ClusterActions } from "../clusterKeys";
+  import {
+    handleClusterKey,
+    clusterKeyHandlers,
+    moveSelection,
+    type ClusterActions,
+  } from "../clusterKeys";
   import { currentKindLabel, searchEnabled, matchRow } from "../command";
   import VirtualList from "./VirtualList.svelte";
   import CommandBar from "./CommandBar.svelte";
@@ -120,6 +125,17 @@
     return top.kind === "resource" ? top.resourceKind : POD_KIND;
   }
 
+  const podsVisible = $derived(s.pods.rows.filter((p) => matchRow(p.name, s.filter)));
+  const podsSelectedIndex = $derived(
+    s.selected === null ? -1 : podsVisible.findIndex((p) => p.key === s.selected),
+  );
+
+  // The pods table lives in this component, so it publishes its visible keys
+  // here; ResourceTableView does the same for resource views.
+  $effect(() => {
+    if (s.views.top.kind === "pods") s.visibleKeys = podsVisible.map((p) => p.key);
+  });
+
   function parseSelected(): { namespace: string | null; name: string } | null {
     if (s.selected === null) return null;
     const i = s.selected.indexOf("/");
@@ -178,6 +194,7 @@
         pushView({
           kind: "describe",
           title: `${k.kind} ${sel.name}`,
+          resourceKind: k,
           namespace: sel.namespace,
           name: sel.name,
           body,
@@ -279,6 +296,20 @@
         run: () => api.cordonNode(tabId, sel.name, true),
       };
     },
+    uncordon: () => {
+      const sel = parseSelected();
+      if (!sel) return;
+      const k = currentKind();
+      if (k.kind !== "Node" || k.group !== "") {
+        actionError = `uncordon not supported for ${k.kind}`;
+        return;
+      }
+      confirm = {
+        message: `Uncordon ${sel.name}?`,
+        kind: "confirm",
+        run: () => api.cordonNode(tabId, sel.name, false),
+      };
+    },
     shell: () => {
       const k = currentKind();
       if (k.kind !== "Pod" || k.group !== "") {
@@ -305,6 +336,14 @@
           pushView({ kind: "forwards" });
         },
       };
+    },
+    move: (delta) => {
+      const top = s.views.top.kind;
+      if (top !== "pods" && top !== "resource") return false;
+      const next = moveSelection(s.visibleKeys, s.selected, delta);
+      if (next === null) return false;
+      s.selected = next;
+      return true;
     },
     hasSelection: () => s.selected !== null,
   };
@@ -401,7 +440,7 @@
           <span>NAMESPACE</span><span>NAME</span><span>READY</span><span>STATUS</span>
           <span>RESTARTS</span><span>IP</span><span>NODE</span><span>AGE</span>
         </div>
-        <VirtualList items={s.pods.rows.filter((p) => matchRow(p.name, s.filter))} itemHeight={28}>
+        <VirtualList items={podsVisible} itemHeight={28} scrollToIndex={podsSelectedIndex}>
           {#snippet row(pod: PodRow)}
             <div
               class="pod-row"
@@ -449,6 +488,7 @@
       <DescribeView
         {tabId}
         title={s.views.top.title}
+        resourceKind={s.views.top.resourceKind}
         namespace={s.views.top.namespace}
         name={s.views.top.name}
         body={s.views.top.body}

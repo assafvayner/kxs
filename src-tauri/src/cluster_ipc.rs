@@ -14,15 +14,27 @@ use crate::ipc::AppState;
 #[derive(Default)]
 pub struct Sessions(pub Arc<Mutex<HashMap<u32, SessionHandle>>>);
 
+/// Log stream ids are process-global so a stream that outlives its
+/// SessionHandle (replaced by a reconnect) can never prune a same-numbered
+/// stop entry belonging to the replacement handle.
+static NEXT_LOG_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 pub struct SessionHandle {
     pub session: Arc<ClusterSession>,
     pub pod_stop: Option<oneshot::Sender<()>>,
     pub log_stops: HashMap<u32, oneshot::Sender<()>>,
-    pub next_log_id: u32,
     pub execs: HashMap<u32, ExecHandle>,
     pub next_exec_id: u32,
-    pub forwards: HashMap<u32, (u16, oneshot::Sender<()>)>,
+    pub forwards: HashMap<u32, (ForwardTarget, oneshot::Sender<()>)>,
     pub next_forward_id: u32,
+}
+
+#[derive(Clone)]
+pub struct ForwardTarget {
+    pub local_port: u16,
+    pub namespace: String,
+    pub pod: String,
+    pub pod_port: u16,
 }
 
 impl SessionHandle {
@@ -91,7 +103,6 @@ pub async fn open_session(
             session: Arc::new(session),
             pod_stop: None,
             log_stops: HashMap::new(),
-            next_log_id: 0,
             execs: HashMap::new(),
             next_exec_id: 0,
             forwards: HashMap::new(),
@@ -177,8 +188,7 @@ pub async fn stream_logs(
     let (client, id) = {
         let mut map = sessions.0.lock().await;
         let handle = map.get_mut(&tab_id).ok_or("no session for tab")?;
-        let id = handle.next_log_id;
-        handle.next_log_id += 1;
+        let id = NEXT_LOG_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         handle.log_stops.insert(id, stop_tx);
         (handle.session.client.clone(), id)
     };
@@ -285,14 +295,18 @@ pub async fn get_resource_yaml(
 pub async fn get_resource_events(
     tab_id: u32,
     namespace: Option<String>,
+    kind: String,
     name: String,
     sessions: State<'_, Sessions>,
 ) -> Result<Vec<kxs_cluster::resources::ResourceEvent>, String> {
     let session = session_of(&sessions, tab_id).await?;
-    Ok(
-        kxs_cluster::resources::get_events(session.client.clone(), namespace.as_deref(), &name)
-            .await,
+    Ok(kxs_cluster::resources::get_events(
+        session.client.clone(),
+        namespace.as_deref(),
+        &kind,
+        &name,
     )
+    .await)
 }
 
 #[tauri::command]
@@ -509,6 +523,21 @@ pub async fn stop_exec(
 pub struct ForwardInfo {
     pub id: u32,
     pub local_port: u16,
+    pub namespace: String,
+    pub pod: String,
+    pub pod_port: u16,
+}
+
+impl ForwardInfo {
+    fn new(id: u32, t: &ForwardTarget) -> Self {
+        ForwardInfo {
+            id,
+            local_port: t.local_port,
+            namespace: t.namespace.clone(),
+            pod: t.pod.clone(),
+            pod_port: t.pod_port,
+        }
+    }
 }
 
 #[tauri::command]
@@ -522,13 +551,21 @@ pub async fn start_forward(
     let client = session_of(&sessions, tab_id).await?.client.clone();
     let (stop_tx, stop_rx) = oneshot::channel();
     let (local_port, _handle) =
-        kxs_cluster::portforward::start(client, namespace, pod, pod_port, stop_rx).await?;
+        kxs_cluster::portforward::start(client, namespace.clone(), pod.clone(), pod_port, stop_rx)
+            .await?;
+    let target = ForwardTarget {
+        local_port,
+        namespace,
+        pod,
+        pod_port,
+    };
     let mut map = sessions.0.lock().await;
     let h = map.get_mut(&tab_id).ok_or("no session for tab")?;
     let id = h.next_forward_id;
     h.next_forward_id += 1;
-    h.forwards.insert(id, (local_port, stop_tx));
-    Ok(ForwardInfo { id, local_port })
+    let info = ForwardInfo::new(id, &target);
+    h.forwards.insert(id, (target, stop_tx));
+    Ok(info)
 }
 
 #[tauri::command]
@@ -556,10 +593,7 @@ pub async fn list_forwards(
     let mut v: Vec<ForwardInfo> = h
         .forwards
         .iter()
-        .map(|(id, (p, _))| ForwardInfo {
-            id: *id,
-            local_port: *p,
-        })
+        .map(|(id, (t, _))| ForwardInfo::new(*id, t))
         .collect();
     v.sort_by_key(|f| f.id);
     Ok(v)

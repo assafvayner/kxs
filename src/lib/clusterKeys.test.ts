@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleClusterKey, type ClusterActions } from "./clusterKeys";
+import { handleClusterKey, moveSelection, type ClusterActions } from "./clusterKeys";
 
 function actions(overrides: Partial<ClusterActions> = {}): ClusterActions {
   return {
@@ -15,8 +15,10 @@ function actions(overrides: Partial<ClusterActions> = {}): ClusterActions {
     scale: vi.fn(),
     restart: vi.fn(),
     cordon: vi.fn(),
+    uncordon: vi.fn(),
     shell: vi.fn(),
     forward: vi.fn(),
+    move: vi.fn(() => true),
     hasSelection: () => true,
     ...overrides,
   };
@@ -90,5 +92,49 @@ describe("handleClusterKey", () => {
     const a = actions({ hasSelection: () => false });
     expect(handleClusterKey(ev("e"), a)).toBe(false);
     expect(a.edit).not.toHaveBeenCalled();
+  });
+  it("u uncordons with selection, ignored without", () => {
+    const a = actions();
+    expect(handleClusterKey(ev("u"), a)).toBe(true);
+    expect(a.uncordon).toHaveBeenCalled();
+    const b = actions({ hasSelection: () => false });
+    expect(handleClusterKey(ev("u"), b)).toBe(false);
+  });
+  it("j/k and arrows move the selection; unhandled move falls through", () => {
+    const a = actions();
+    expect(handleClusterKey(ev("j"), a)).toBe(true);
+    expect(a.move).toHaveBeenLastCalledWith(1);
+    expect(handleClusterKey(ev("k"), a)).toBe(true);
+    expect(a.move).toHaveBeenLastCalledWith(-1);
+    expect(handleClusterKey(ev("ArrowDown"), a)).toBe(true);
+    expect(a.move).toHaveBeenLastCalledWith(1);
+    expect(handleClusterKey(ev("ArrowUp"), a)).toBe(true);
+    expect(a.move).toHaveBeenLastCalledWith(-1);
+    const b = actions({ move: vi.fn(() => false) });
+    const e = ev("j");
+    expect(handleClusterKey(e, b)).toBe(false);
+    expect(e.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
+describe("moveSelection", () => {
+  const keys = ["a/1", "a/2", "b/1"];
+  it("empty list yields null", () => {
+    expect(moveSelection([], null, 1)).toBe(null);
+    expect(moveSelection([], "a/1", -1)).toBe(null);
+  });
+  it("no selection starts from the edge in the direction of travel", () => {
+    expect(moveSelection(keys, null, 1)).toBe("a/1");
+    expect(moveSelection(keys, null, -1)).toBe("b/1");
+  });
+  it("stale selection (filtered out) restarts from the edge", () => {
+    expect(moveSelection(keys, "gone", 1)).toBe("a/1");
+    expect(moveSelection(keys, "gone", -1)).toBe("b/1");
+  });
+  it("steps and clamps at both ends", () => {
+    expect(moveSelection(keys, "a/1", 1)).toBe("a/2");
+    expect(moveSelection(keys, "a/2", -1)).toBe("a/1");
+    expect(moveSelection(keys, "b/1", 1)).toBe("b/1");
+    expect(moveSelection(keys, "a/1", -1)).toBe("a/1");
   });
 });

@@ -92,7 +92,7 @@ describe("currentKindLabel", () => {
     const views: View[] = [
       { kind: "pods" },
       { kind: "resource", resourceKind: dep },
-      { kind: "describe", title: "Deployment web", namespace: "default", name: "web", body: "" },
+      { kind: "describe", title: "Deployment web", resourceKind: dep, namespace: "default", name: "web", body: "" },
     ];
     expect(currentKindLabel(views)).toBe("Deployment");
   });
@@ -114,7 +114,16 @@ describe("searchEnabled", () => {
         resourceKind: { group: "apps", version: "v1", kind: "Deployment", plural: "deployments", namespaced: true, aliases: [] },
       }),
     ).toBe(true);
-    expect(searchEnabled({ kind: "describe", title: "t", namespace: "default", name: "n", body: "" })).toBe(true);
+    expect(
+      searchEnabled({
+        kind: "describe",
+        title: "t",
+        resourceKind: { group: "", version: "v1", kind: "Pod", plural: "pods", namespaced: true, aliases: [] },
+        namespace: "default",
+        name: "n",
+        body: "",
+      }),
+    ).toBe(true);
     expect(searchEnabled({ kind: "yaml", title: "t", body: "" })).toBe(true);
     expect(searchEnabled({ kind: "logs", namespace: "default", pod: "p" })).toBe(true);
     expect(searchEnabled({ kind: "metrics" })).toBe(true);

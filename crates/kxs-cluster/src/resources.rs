@@ -20,9 +20,16 @@ pub fn list_path(group: &str, version: &str, plural: &str, namespace: Option<&st
 #[serde(rename_all = "camelCase")]
 pub struct RawTable {
     #[serde(default)]
+    pub metadata: RawListMeta,
+    #[serde(default)]
     pub column_definitions: Vec<RawColumn>,
     #[serde(default)]
     pub rows: Vec<RawRow>,
+}
+#[derive(Debug, Default, Deserialize)]
+pub struct RawListMeta {
+    #[serde(rename = "continue", default)]
+    pub r#continue: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,7 +138,24 @@ pub(crate) fn api_resource(group: &str, version: &str, kind: &str, plural: &str)
     ar
 }
 
+/// Percent-encode a continue token for use as a query value (base64 tokens
+/// can contain '+', '/', '=' which are not query-safe).
+fn encode_query_value(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for b in v.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 /// Server-side Table list for any kind. `namespace: None` = all namespaces.
+/// Follows list continuation up to `MAX_TABLE_PAGES` pages so large clusters
+/// aren't silently truncated at the per-request limit.
 pub async fn list_table(
     client: Client,
     group: &str,
@@ -139,16 +163,38 @@ pub async fn list_table(
     plural: &str,
     namespace: Option<&str>,
 ) -> Result<ResourceTable, String> {
+    const MAX_TABLE_PAGES: usize = 10;
     let path = list_path(group, version, plural, namespace);
-    let req = http::Request::get(format!("{path}?limit=1000"))
-        .header(
-            http::header::ACCEPT,
-            "application/json;as=Table;v=v1;g=meta.k8s.io,application/json",
-        )
-        .body(Vec::new())
-        .map_err(|e| e.to_string())?;
-    let raw: RawTable = client.request(req).await.map_err(|e| e.to_string())?;
-    Ok(map_table(raw))
+    let mut merged: Option<RawTable> = None;
+    let mut continue_token: Option<String> = None;
+    for _ in 0..MAX_TABLE_PAGES {
+        let mut url = format!("{path}?limit=1000");
+        if let Some(t) = &continue_token {
+            url.push_str("&continue=");
+            url.push_str(&encode_query_value(t));
+        }
+        let req = http::Request::get(url)
+            .header(
+                http::header::ACCEPT,
+                "application/json;as=Table;v=v1;g=meta.k8s.io,application/json",
+            )
+            .body(Vec::new())
+            .map_err(|e| e.to_string())?;
+        let mut raw: RawTable = client.request(req).await.map_err(|e| e.to_string())?;
+        continue_token = raw.metadata.r#continue.take().filter(|t| !t.is_empty());
+        match &mut merged {
+            None => merged = Some(raw),
+            Some(m) => m.rows.extend(raw.rows),
+        }
+        if continue_token.is_none() {
+            break;
+        }
+    }
+    Ok(map_table(merged.unwrap_or_else(|| RawTable {
+        metadata: RawListMeta::default(),
+        column_definitions: Vec::new(),
+        rows: Vec::new(),
+    })))
 }
 
 /// Full manifest as YAML for one object.
@@ -187,15 +233,27 @@ pub struct ResourceEvent {
     pub last_seen: Option<String>,
 }
 
-/// Events referencing a given object (best-effort; empty on error).
-pub async fn get_events(client: Client, namespace: Option<&str>, name: &str) -> Vec<ResourceEvent> {
+/// Events referencing a given object (best-effort; empty on error). Filtering
+/// by kind too keeps out events for same-named objects of other kinds (e.g. a
+/// Service and Deployment both called "web").
+pub async fn get_events(
+    client: Client,
+    namespace: Option<&str>,
+    kind: &str,
+    name: &str,
+) -> Vec<ResourceEvent> {
     use k8s_openapi::api::core::v1::Event;
     use kube::api::ListParams;
     let api: Api<Event> = match namespace {
         Some(ns) if !ns.is_empty() => Api::namespaced(client, ns),
         _ => Api::all(client),
     };
-    let lp = ListParams::default().fields(&format!("involvedObject.name={name}"));
+    let fields = if kind.is_empty() {
+        format!("involvedObject.name={name}")
+    } else {
+        format!("involvedObject.kind={kind},involvedObject.name={name}")
+    };
+    let lp = ListParams::default().fields(&fields);
     let list = match api.list(&lp).await {
         Ok(l) => l,
         Err(_) => return Vec::new(),
@@ -279,6 +337,12 @@ mod tests {
             "/apis/rbac.authorization.k8s.io/v1/clusterroles"
         );
     }
+    #[test]
+    fn continue_token_query_encoding() {
+        assert_eq!(encode_query_value("abc-123_.~"), "abc-123_.~");
+        assert_eq!(encode_query_value("a+b/c=="), "a%2Bb%2Fc%3D%3D");
+    }
+
     #[test]
     fn empty_namespace_treated_as_all() {
         // caller passes None for all-namespaces; empty &str should not happen, but guard:
@@ -410,5 +474,46 @@ mod tests {
         let store = kxs_core::kubeconfig::store::KubeconfigStore::load(paths).unwrap();
         let yaml = crate::bridge::kubeconfig_yaml_for_context(&store, "kind-local").unwrap();
         crate::session::connect(&yaml, "kind-local").await.unwrap()
+    }
+
+    /// Run manually: cargo test -p kxs-cluster -- --ignored (needs kind-local
+    /// in ~/.kube/config). The kind filter must be accepted by the apiserver
+    /// as a field selector (empty result is fine; an unsupported selector
+    /// would error server-side and get_events would swallow it — so also
+    /// check a name-only call returns at least as many events).
+    #[tokio::test]
+    #[ignore]
+    async fn get_events_filters_by_kind_on_kind_local() {
+        use k8s_openapi::api::core::v1::Event;
+        let session = kind_session().await;
+        // find any event to use its involvedObject as the probe target
+        let ev_api: Api<Event> = Api::all(session.client.clone());
+        let evs = ev_api
+            .list(&ListParams::default().limit(5))
+            .await
+            .unwrap()
+            .items;
+        let Some(ev) = evs
+            .into_iter()
+            .find(|e| e.involved_object.kind.is_some() && e.involved_object.name.is_some())
+        else {
+            eprintln!("no events in cluster; nothing to assert");
+            return;
+        };
+        let kind = ev.involved_object.kind.unwrap();
+        let name = ev.involved_object.name.unwrap();
+        let ns = ev.involved_object.namespace;
+        let with_kind =
+            super::get_events(session.client.clone(), ns.as_deref(), &kind, &name).await;
+        assert!(
+            !with_kind.is_empty(),
+            "expected events for {kind}/{name} with kind filter"
+        );
+        let wrong_kind =
+            super::get_events(session.client.clone(), ns.as_deref(), "NoSuchKind", &name).await;
+        assert!(
+            wrong_kind.is_empty(),
+            "kind filter must exclude other kinds"
+        );
     }
 }

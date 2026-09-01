@@ -11,9 +11,25 @@ export interface ClusterActions {
   scale(): void;
   restart(): void;
   cordon(): void;
+  uncordon(): void;
   shell(): void;
   forward(): void;
+  /** Move the row selection by delta; returns false when the view has no rows to select. */
+  move(delta: number): boolean;
   hasSelection(): boolean;
+}
+
+/** Next selected key after moving by `delta` in `keys` (visible row order).
+ * No selection (or a stale one) starts from the top/bottom edge; empty list → null. */
+export function moveSelection(
+  keys: string[],
+  selected: string | null,
+  delta: number,
+): string | null {
+  if (keys.length === 0) return null;
+  const i = selected === null ? -1 : keys.indexOf(selected);
+  if (i === -1) return delta > 0 ? keys[0] : keys[keys.length - 1];
+  return keys[Math.min(keys.length - 1, Math.max(0, i + delta))];
 }
 
 export interface ClusterKeyInput {
@@ -34,6 +50,14 @@ export function handleClusterKey(e: ClusterKeyInput, a: ClusterActions): boolean
   }
   if (e.metaKey || e.ctrlKey) return false;
   switch (e.key) {
+    case "j":
+    case "ArrowDown":
+    case "k":
+    case "ArrowUp": {
+      const handled = a.move(e.key === "j" || e.key === "ArrowDown" ? 1 : -1);
+      if (handled) e.preventDefault();
+      return handled;
+    }
     case ":":
       a.openCommand();
       e.preventDefault();
@@ -78,6 +102,11 @@ export function handleClusterKey(e: ClusterKeyInput, a: ClusterActions): boolean
     case "c":
       if (!a.hasSelection()) return false;
       a.cordon();
+      e.preventDefault();
+      return true;
+    case "u":
+      if (!a.hasSelection()) return false;
+      a.uncordon();
       e.preventDefault();
       return true;
     case "x":

@@ -40,6 +40,14 @@
   }
 
   const visible = $derived(rows.filter((r) => matchRow(r.name, session.filter)));
+  const selectedIndex = $derived(
+    session.selected === null ? -1 : visible.findIndex((r) => r.key === session.selected),
+  );
+
+  // Publish visible keys so keyboard selection (j/k) can walk this table.
+  $effect(() => {
+    session.visibleKeys = visible.map((r) => r.key);
+  });
 
   onMount(() => {
     timer = setInterval(refresh, 5000);
@@ -60,7 +68,7 @@
     <div class="rtable-head" style="grid-template-columns: repeat({columns.length}, minmax(80px, 1fr));">
       {#each columns as c}<span>{c}</span>{/each}
     </div>
-    <VirtualList items={visible} itemHeight={28}>
+    <VirtualList items={visible} itemHeight={28} scrollToIndex={selectedIndex}>
       {#snippet row(r: ResourceRow)}
         <div
           class="rtable-row"

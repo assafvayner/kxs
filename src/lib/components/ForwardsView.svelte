@@ -7,7 +7,11 @@
   let { tabId, session }: { tabId: number; session: TabSession } = $props();
 
   let forwards = $state<ForwardInfo[]>([]);
-  const visible = $derived(forwards.filter((f) => matchRow(`127.0.0.1:${f.localPort}`, session.filter)));
+  const visible = $derived(
+    forwards.filter((f) =>
+      matchRow(`127.0.0.1:${f.localPort} ${f.namespace}/${f.pod}:${f.podPort}`, session.filter),
+    ),
+  );
   let error = $state<string | null>(null);
   let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -41,12 +45,13 @@
   {#if error}
     <div class="connect-error"><pre class="mono">{error}</pre></div>
   {/if}
-  <div class="rtable-head" style="grid-template-columns: 2fr 1fr;">
-    <span>Local address</span><span></span>
+  <div class="rtable-head" style="grid-template-columns: 2fr 3fr 1fr;">
+    <span>Local address</span><span>Target</span><span></span>
   </div>
   {#each visible as fwd (fwd.id)}
-    <div class="rtable-row" style="grid-template-columns: 2fr 1fr;">
+    <div class="rtable-row" style="grid-template-columns: 2fr 3fr 1fr;">
       <span class="mono">127.0.0.1:{fwd.localPort}</span>
+      <span class="mono dim">{fwd.namespace}/{fwd.pod}:{fwd.podPort}</span>
       <span><button onclick={() => stop(fwd.id)}>Stop</button></span>
     </div>
   {/each}

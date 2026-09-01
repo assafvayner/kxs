@@ -6,7 +6,9 @@
     items,
     itemHeight = 28,
     row,
-  }: { items: T[]; itemHeight?: number; row: Snippet<[T]> } = $props();
+    scrollToIndex = null,
+  }: { items: T[]; itemHeight?: number; row: Snippet<[T]>; scrollToIndex?: number | null } =
+    $props();
 
   let viewport: HTMLDivElement | undefined = $state();
   let scrollTop = $state(0);
@@ -18,6 +20,21 @@
   function onscroll() {
     if (viewport) scrollTop = viewport.scrollTop;
   }
+
+  // Keep the given row inside the viewport (keyboard selection follows j/k).
+  $effect(() => {
+    if (scrollToIndex === null || scrollToIndex < 0 || !viewport) return;
+    const top = scrollToIndex * itemHeight;
+    const bottom = top + itemHeight;
+    if (top < viewport.scrollTop) {
+      viewport.scrollTop = top;
+      scrollTop = top;
+    } else if (bottom > viewport.scrollTop + viewport.clientHeight) {
+      const t = bottom - viewport.clientHeight;
+      viewport.scrollTop = t;
+      scrollTop = t;
+    }
+  });
 </script>
 
 <div

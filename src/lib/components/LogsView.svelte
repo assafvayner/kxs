@@ -16,7 +16,13 @@
   const CAP = 10000;
 
   let body = $state<HTMLElement | undefined>(undefined);
-  let scrolledToEnd = false;
+  // Sticky-bottom: keep following the tail while the user is at (or near) the
+  // end; scrolling up detaches, scrolling back down re-attaches.
+  let atBottom = true;
+  function onBodyScroll() {
+    if (!body) return;
+    atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 8;
+  }
 
   async function start() {
     const mySeq = ++seq;
@@ -25,7 +31,7 @@
       streamId = undefined;
     }
     lines = [];
-    scrolledToEnd = false;
+    atBottom = true;
     try {
       const id = await api.streamLogs(
         tabId,
@@ -65,11 +71,12 @@
 
   const visible = $derived(session.filter ? lines.filter((l) => matchRow(l, session.filter)) : lines);
 
-  // Jump to the newest log line once the first batch renders.
+  // Keep the view pinned to the newest line while the user hasn't scrolled up.
   $effect(() => {
-    if (scrolledToEnd || visible.length === 0 || !body) return;
-    scrolledToEnd = true;
-    requestAnimationFrame(() => body && (body.scrollTop = body.scrollHeight));
+    if (visible.length === 0 || !body || !atBottom) return;
+    requestAnimationFrame(() => {
+      if (body && atBottom) body.scrollTop = body.scrollHeight;
+    });
   });
 </script>
 
@@ -84,5 +91,9 @@
     <span class="dim">{visible.length}/{lines.length}</span>
   </div>
   {#if error}<div class="connect-error"><pre class="mono">{error}</pre></div>{/if}
-  <pre bind:this={body} class="detail-body logs mono" class:nowrap={!wrap}>{visible.join("\n")}</pre>
+  <pre
+    bind:this={body}
+    onscroll={onBodyScroll}
+    class="detail-body logs mono"
+    class:nowrap={!wrap}>{visible.join("\n")}</pre>
 </div>

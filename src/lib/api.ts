@@ -141,6 +141,9 @@ export type ExecEvent =
 export interface ForwardInfo {
   id: number;
   localPort: number;
+  namespace: string;
+  pod: string;
+  podPort: number;
 }
 
 export interface MetricsRow {
@@ -196,8 +199,8 @@ export const api = {
       namespace,
       name,
     }),
-  getResourceEvents: (tabId: number, namespace: string | null, name: string) =>
-    invoke<ResourceEvent[]>("get_resource_events", { tabId, namespace, name }),
+  getResourceEvents: (tabId: number, namespace: string | null, kind: string, name: string) =>
+    invoke<ResourceEvent[]>("get_resource_events", { tabId, namespace, kind, name }),
   applyYaml: (
     tabId: number,
     k: ResourceKind,

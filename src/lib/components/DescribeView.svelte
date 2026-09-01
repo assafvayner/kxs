@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type ResourceEvent } from "../api";
+  import { api, type ResourceEvent, type ResourceKind } from "../api";
   import type { TabSession } from "../stores/sessions.svelte";
   import HighlightedText from "./HighlightedText.svelte";
   let {
     tabId,
     title,
+    resourceKind,
     namespace,
     name,
     body,
@@ -13,6 +14,7 @@
   }: {
     tabId: number;
     title: string;
+    resourceKind: ResourceKind;
     namespace: string | null;
     name: string;
     body: string;
@@ -22,7 +24,7 @@
   let eventsError = $state<string | null>(null);
   onMount(async () => {
     try {
-      events = await api.getResourceEvents(tabId, namespace, name);
+      events = await api.getResourceEvents(tabId, namespace, resourceKind.kind, name);
     } catch (e) {
       eventsError = String(e);
     }

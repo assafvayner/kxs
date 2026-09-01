@@ -20,6 +20,9 @@ export class TabSession {
   presentKinds = $state<Set<string> | null>(null);
   filter = $state("");
   selected = $state<string | null>(null);
+  /** Keys of the rows currently visible (post-filter, in display order) in the
+   * active table view; keyboard selection (j/k) walks this list. */
+  visibleKeys = $state<string[]>([]);
 }
 
 /** tabId → session UI state; TabBar reads dots from here. */

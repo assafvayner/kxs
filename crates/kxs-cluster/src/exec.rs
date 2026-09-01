@@ -121,6 +121,12 @@ pub async fn exec(
                     match msg {
                         Some(bytes) => {
                             if stdin_writer.write_all(&bytes).await.is_err() {
+                                // remote side went away: tear down and tell the
+                                // frontend instead of leaving the terminal hanging
+                                proc.abort();
+                                let _ = send_end(ExecEvent::Closed {
+                                    message: Some("stdin closed".into()),
+                                });
                                 break;
                             }
                             let _ = stdin_writer.flush().await;
