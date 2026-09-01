@@ -52,6 +52,11 @@ function lineEndOf(text: string, pos: number): number {
 function colOf(text: string, pos: number): number {
   return pos - lineStartOf(text, pos);
 }
+function firstNonBlankOf(text: string, ls: number, le: number): number {
+  let i = ls;
+  while (i < le && /\s/.test(text[i])) i++;
+  return i;
+}
 
 // 1-based inclusive line range -> {start of first line, end of last line (excl. trailing \n)}
 function lineNumberRange(text: string, m: number, n: number): { start: number; end: number } {
@@ -164,6 +169,14 @@ function handleNormal(e: KeyInput, text: string, caret: number, st: VimState): V
       return done(text, caret, snapshot({ ...st, mode: "insert" }, text, caret));
     case "a":
       return done(text, Math.min(le, caret + 1), snapshot({ ...st, mode: "insert" }, text, caret));
+    case "I":
+      return done(
+        text,
+        firstNonBlankOf(text, ls, le),
+        snapshot({ ...st, mode: "insert" }, text, caret),
+      );
+    case "A":
+      return done(text, le, snapshot({ ...st, mode: "insert" }, text, caret));
     case "o": {
       const st2 = snapshot({ ...st, mode: "insert" }, text, caret);
       return done(text.slice(0, le) + "\n" + text.slice(le), le + 1, st2);
@@ -171,6 +184,19 @@ function handleNormal(e: KeyInput, text: string, caret: number, st: VimState): V
     case "O": {
       const st2 = snapshot({ ...st, mode: "insert" }, text, caret);
       return done(text.slice(0, ls) + "\n" + text.slice(ls), ls, st2);
+    }
+    case "s": {
+      const st2 = snapshot({ ...st, mode: "insert" }, text, caret);
+      if (caret >= le) return done(text, caret, st2);
+      return done(text.slice(0, caret) + text.slice(caret + 1), caret, st2);
+    }
+    case "S": {
+      const st2 = snapshot({ ...st, mode: "insert" }, text, caret);
+      return done(text.slice(0, ls) + text.slice(le), ls, st2);
+    }
+    case "C": {
+      const st2 = snapshot({ ...st, mode: "insert" }, text, caret);
+      return done(text.slice(0, caret) + text.slice(le), caret, st2);
     }
     case "Escape":
       return done(text, caret, { ...st, pending: "", op: null });

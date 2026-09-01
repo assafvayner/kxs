@@ -77,6 +77,53 @@ describe("vim insert entry", () => {
     const r = run("abc", 1, ["i", "Escape"]);
     expect(r.mode).toBe("normal");
   });
+  it("I enters insert at the first non-blank of the line", () => {
+    const r = run("  abc\ndef", 4, ["I"]);
+    expect(r.mode).toBe("insert");
+    expect(r.caret).toBe(2);
+  });
+  it("I on a line with no leading blanks behaves like caret unchanged if already there", () => {
+    const r = run("abc\ndef", 5, ["I"]);
+    expect(r.mode).toBe("insert");
+    expect(r.caret).toBe(4);
+  });
+  it("A enters insert at the end of the line", () => {
+    const r = run("abc\ndef", 0, ["A"]);
+    expect(r.mode).toBe("insert");
+    expect(r.caret).toBe(3);
+    expect(r.text).toBe("abc\ndef");
+  });
+  it("s deletes the char under the caret and enters insert", () => {
+    const r = run("abc", 1, ["s"]);
+    expect(r.text).toBe("ac");
+    expect(r.caret).toBe(1);
+    expect(r.mode).toBe("insert");
+  });
+  it("s at end of line does not delete but still enters insert", () => {
+    const r = run("abc", 3, ["s"]);
+    expect(r.text).toBe("abc");
+    expect(r.caret).toBe(3);
+    expect(r.mode).toBe("insert");
+  });
+  it("S clears the current line and enters insert", () => {
+    const r = run("abc\ndef", 5, ["S"]);
+    expect(r.text).toBe("abc\n");
+    expect(r.caret).toBe(4);
+    expect(r.mode).toBe("insert");
+  });
+  it("C deletes from the caret to end of line and enters insert", () => {
+    const r = run("abc\ndef", 1, ["C"]);
+    expect(r.text).toBe("a\ndef");
+    expect(r.caret).toBe(1);
+    expect(r.mode).toBe("insert");
+  });
+  it("I, A, s, S, C each take an undo snapshot", () => {
+    expect(run("  abc", 4, ["I", "Escape", "u"]).text).toBe("  abc");
+    expect(run("abc", 0, ["A", "Escape", "u"]).text).toBe("abc");
+    expect(run("abc", 1, ["s", "Escape", "u"]).text).toBe("abc");
+    expect(run("abc\ndef", 5, ["S", "Escape", "u"]).text).toBe("abc\ndef");
+    expect(run("abc", 1, ["C", "Escape", "u"]).text).toBe("abc");
+  });
 });
 
 describe("vim passthrough", () => {
@@ -146,6 +193,16 @@ describe("vim operators", () => {
   it("cc clears the line and enters insert", () => {
     const r = run(T, 1, ["c", "c"]);
     expect(r.text).toBe("\nbaz qux");
+    expect(r.mode).toBe("insert");
+  });
+  it("c$ deletes to end of line and enters insert", () => {
+    const r = run(T, 4, ["c", "$"]);
+    expect(r.text).toBe("foo \nbaz qux");
+    expect(r.mode).toBe("insert");
+  });
+  it("c0 deletes to line start and enters insert", () => {
+    const r = run(T, 4, ["c", "0"]);
+    expect(r.text).toBe("bar\nbaz qux");
     expect(r.mode).toBe("insert");
   });
   it("yw then p copies a word (pasted at the caret)", () => {
