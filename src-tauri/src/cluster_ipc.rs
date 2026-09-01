@@ -373,6 +373,21 @@ pub async fn get_resource_yaml(
     .await
 }
 
+/// Raw OpenAPI v3 JSON for a group/version, or null when the cluster has none.
+#[tauri::command]
+pub async fn get_openapi_schema(
+    tab_id: u32,
+    group: String,
+    version: String,
+    sessions: State<'_, Sessions>,
+) -> Result<Option<String>, String> {
+    let session = session_of(&sessions, tab_id).await?;
+    let doc =
+        kxs_cluster::schema::openapi_document(&session.client, &session.openapi, &group, &version)
+            .await?;
+    Ok(doc.map(|d| d.to_string()))
+}
+
 #[tauri::command]
 pub async fn get_resource_events(
     tab_id: u32,

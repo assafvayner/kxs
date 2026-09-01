@@ -296,6 +296,9 @@ export const api = {
       namespace,
       name,
     }),
+  /// Raw OpenAPI v3 document for a group/version, or null when the cluster publishes none.
+  getOpenApiSchema: (tabId: number, group: string, version: string) =>
+    invoke<string | null>("get_openapi_schema", { tabId, group, version }),
   getResourceEvents: (tabId: number, namespace: string | null, kind: string, name: string) =>
     invoke<ResourceEvent[]>("get_resource_events", { tabId, namespace, kind, name }),
   /// Applies the diff of `yaml` against `baseYaml` (the document the editor was

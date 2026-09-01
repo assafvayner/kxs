@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, type ResourceKind } from "../api";
+  import { schemaProviderFor } from "../editor/k8s/provider";
   import { settings } from "../stores/settings.svelte";
   import CodeEditor from "./CodeEditor.svelte";
 
@@ -20,6 +21,12 @@
     name: string;
     onClose: () => void;
   } = $props();
+
+  // svelte-ignore state_referenced_locally -- tabId and resourceKind are fixed for the life of the editor
+  const k8s = {
+    provider: schemaProviderFor(tabId),
+    fallback: { group: resourceKind.group, version: resourceKind.version, kind: resourceKind.kind },
+  };
 
   // svelte-ignore state_referenced_locally -- one-time seed of the draft from the initial prop value
   let draft = $state(body);
@@ -134,6 +141,7 @@
     autofocus
     commands={exCommands}
     onEscape={onClose}
-    onVimMode={(m) => (vimMode = m)} />
+    onVimMode={(m) => (vimMode = m)}
+    {k8s} />
   {#if status.kind === "err"}<pre class="apply-err mono">{status.msg}</pre>{/if}
 </div>

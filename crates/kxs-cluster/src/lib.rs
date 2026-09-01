@@ -8,5 +8,6 @@ pub mod pods;
 pub mod portforward;
 pub mod quantity;
 pub mod resources;
+pub mod schema;
 pub mod session;
 pub mod workloads;

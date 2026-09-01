@@ -4,6 +4,7 @@
   import { EditorView, keymap, ViewPlugin } from "@codemirror/view";
   import { closeSearchPanel } from "@codemirror/search";
   import { getCM, vim } from "@replit/codemirror-vim";
+  import type { K8sOptions } from "../editor/k8s";
   import { matchingLines, setFilter } from "../editor/filterHighlight";
   import { buildExtensions, defineExCommands } from "../editor/setup";
   import { setExCommands, type ExCommands } from "../editor/vimEx";
@@ -17,6 +18,7 @@
     commands,
     onEscape,
     onVimMode,
+    k8s,
   }: {
     value?: string;
     /** Read at construction only. */
@@ -29,6 +31,8 @@
     onEscape?: () => void;
     /** Vim mode name: normal, insert, visual, visual line, visual block, replace. */
     onVimMode?: (mode: string) => void;
+    /** Read at construction only. */
+    k8s?: K8sOptions;
   } = $props();
 
   let host: HTMLDivElement | undefined = $state();
@@ -93,6 +97,7 @@
           escapeCompartment.of(escapeExtension(vimOn)),
           buildExtensions({
             readOnly,
+            k8s,
             onChange: (doc) => {
               if (doc !== value) value = doc;
             },

@@ -1,8 +1,8 @@
 # Kubernetes manifest validation in the YAML editor
 
-Status: design, not implemented. Depends on the CodeMirror 6 migration of
-`YamlEditView` (the editor must be a CodeMirror `EditorView` for `@codemirror/lint`
-to attach).
+Status: phases 1 and 3 implemented (schema validation, unknown-field
+detection, key and enum completion) in `src/lib/editor/k8s/`; phase 2
+(dry-run diagnostics) is not implemented.
 
 ## Goals
 
@@ -150,12 +150,14 @@ over the `components.schemas` object, applied once per document and cached:
 - `x-kubernetes-int-or-string: true` becomes `type: ["integer", "string"]`;
   the source schema usually already carries `oneOf` for this, so only add when
   absent.
-- `x-kubernetes-preserve-unknown-fields: true` means do not add
-  `additionalProperties: false` for that object.
-- Every other `type: object` schema with `properties` and no
-  `additionalProperties` gets `additionalProperties: false`. This is what turns
-  a typo like `replcas` into an error; kubeconform's `-strict` mode does the
-  same. Without it, JSON Schema silently allows unknown keys.
+- Unknown fields are not handled through `additionalProperties: false`.
+  `@cfworker/json-schema` also reports every declared-but-failing property as
+  an additional property, which doubles every error. Instead
+  `unknownFieldDiagnostics` walks the YAML AST alongside the schema and flags
+  keys missing from `properties` when the object has properties, no
+  `additionalProperties`, and no `x-kubernetes-preserve-unknown-fields`. That
+  is what turns a typo like `replcas` into an error, with the squiggle on the
+  key itself.
 - `format` values other than the standard set (`int32`, `int64`, `date-time`,
   `byte`) are dropped so the validator does not reject them.
 - Strip the `x-kubernetes-*` vendor keys after they have been consumed.
@@ -248,9 +250,15 @@ Range selection by error kind:
   property name is in the message ("Property "replcas" does not match
   additional properties schema"). Extract it, find that pair, and highlight
   its key. If extraction fails, fall back to the object's first line.
-- `oneOf`/`anyOf`/`allOf`: skip the wrapper error and keep only the leaf
-  errors whose `keywordLocation` extends the wrapper's, so the user sees
-  "expected integer" not "does not match any schema".
+- Only leaf keywords are mapped (`type`, `enum`, `required`, `pattern`,
+  bounds, lengths, `format`, `const`); `$ref`, `properties`, `allOf`,
+  `oneOf`, `anyOf`, and `additionalProperties` wrapper errors are dropped.
+  Leaf errors that land on one range merge into a single diagnostic, so a
+  boolean where `IntOrString` is expected reads "Expected integer or string,
+  got boolean" rather than two messages.
+- While the document has a YAML parse error (typically mid-keystroke, before
+  the colon of a new key), only the parse error is shown; schema diagnostics
+  return on the next parseable state.
 
 When the node has no range (an implicit null value like `foo:` with nothing
 after it), use `pair.key.range[1]` as a zero-width position; CodeMirror renders

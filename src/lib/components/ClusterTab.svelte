@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   import { api } from "../api";
   import type { DeleteOptions, MetricsRow, PodRow, ResourceKind } from "../api";
+  import { dropSchemaProvider } from "../editor/k8s/provider";
   import { cpuUtil, memUtil } from "../utilization";
   import { copyText } from "../clipboard";
   import { sessions, TabSession } from "../stores/sessions.svelte";
@@ -792,6 +793,7 @@
     destroyed = true;
     stopMetrics();
     clusterKeyHandlers.delete(tabId);
+    dropSchemaProvider(tabId);
     api.closeSession(tabId).catch(() => {});
     sessions.delete(tabId);
   });

@@ -14,6 +14,7 @@ import {
 } from "@codemirror/view";
 import { Vim } from "@replit/codemirror-vim";
 import { filterHighlight } from "./filterHighlight";
+import { k8sExtensions, type K8sOptions } from "./k8s";
 import { editorTheme, yamlHighlight } from "./theme";
 import { EX_COMMANDS, runEx } from "./vimEx";
 
@@ -32,6 +33,8 @@ export function defineExCommands(): void {
 export interface EditorOptions {
   readOnly: boolean;
   onChange: (doc: string) => void;
+  /** Schema validation and completion for a Kubernetes manifest; omit for plain YAML. */
+  k8s?: K8sOptions;
 }
 
 /** Everything except the vim and Escape bindings, which the component swaps through compartments. */
@@ -56,5 +59,6 @@ export function buildExtensions(o: EditorOptions): Extension[] {
       if (u.docChanged) o.onChange(u.state.doc.toString());
     }),
     ...editing,
+    o.k8s ? k8sExtensions(o.k8s) : [],
   ];
 }

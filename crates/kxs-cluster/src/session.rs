@@ -8,6 +8,7 @@ pub struct ClusterSession {
     pub context: String,
     pub client: Client,
     pub default_namespace: String,
+    pub openapi: crate::schema::OpenApiCache,
 }
 
 pub async fn connect(kubeconfig_yaml: &str, context: &str) -> Result<ClusterSession, String> {
@@ -30,6 +31,7 @@ pub async fn connect(kubeconfig_yaml: &str, context: &str) -> Result<ClusterSess
         context: context.to_string(),
         client,
         default_namespace,
+        openapi: Default::default(),
     })
 }
 
