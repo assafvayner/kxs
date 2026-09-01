@@ -388,9 +388,9 @@ function execEx(text: string, caret: number, st: VimState): VimResult {
   const action = m[3];
 
   if (!action) {
-    // :N -> jump to start of line N
-    const { start } = lineNumberRange(text, a, a);
-    return done(text, start, normal);
+    // :N -> jump to the first non-blank char of line N (clamped to the last line)
+    const { start, end } = lineNumberRange(text, a, a);
+    return done(text, firstNonBlankOf(text, start, end), normal);
   }
 
   const { start, end } = lineNumberRange(text, a, b);
