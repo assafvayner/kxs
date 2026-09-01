@@ -4,3 +4,4 @@ target/
 .superpowers/
 docs/superpowers/
 src-tauri/gen/
+.DS_Store
