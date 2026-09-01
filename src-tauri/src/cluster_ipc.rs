@@ -147,6 +147,7 @@ pub async fn list_namespaces(
 pub async fn watch_pods(
     tab_id: u32,
     namespace: Option<String>,
+    label_selector: Option<String>,
     channel: Channel<PodEvent>,
     sessions: State<'_, Sessions>,
 ) -> Result<(), String> {
@@ -162,6 +163,7 @@ pub async fn watch_pods(
     tauri::async_runtime::spawn(run_pod_watch(
         client,
         namespace,
+        label_selector,
         move |ev| channel.send(ev).is_ok(),
         stop_rx,
     ));
@@ -271,6 +273,7 @@ pub async fn list_resource_table(
     version: String,
     plural: String,
     namespace: Option<String>,
+    label_selector: Option<String>,
     sessions: State<'_, Sessions>,
 ) -> Result<kxs_cluster::resources::ResourceTable, String> {
     let session = session_of(&sessions, tab_id).await?;
@@ -280,6 +283,7 @@ pub async fn list_resource_table(
         &version,
         &plural,
         namespace.as_deref(),
+        label_selector.as_deref(),
     )
     .await
 }
@@ -296,6 +300,7 @@ pub async fn watch_resource_table(
     kind: String,
     plural: String,
     namespace: Option<String>,
+    label_selector: Option<String>,
     channel: Channel<kxs_cluster::resources::TableEvent>,
     sessions: State<'_, Sessions>,
 ) -> Result<u32, String> {
@@ -316,6 +321,7 @@ pub async fn watch_resource_table(
             kind,
             plural,
             namespace,
+            label_selector,
             move |ev| channel.send(ev).is_ok(),
             stop_rx,
         )

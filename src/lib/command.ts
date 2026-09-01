@@ -29,6 +29,25 @@ export function fuzzyKinds(kinds: ResourceKind[], query: string): ResourceKind[]
     .map(([k]) => k);
 }
 
+/**
+ * Splits the search bar into a server-side label selector and a client-side
+ * name filter: `-l <selector>` optionally followed by a name filter (which may
+ * itself be `-r <regex>`). Anything else is a name filter only. The selector
+ * ends at the first whitespace, so selectors with spaces (`app in (a, b)`)
+ * are not supported.
+ */
+export function splitFilter(filter: string): { labels: string | null; name: string } {
+  const f = filter.trim();
+  // a bare "-l" is a selector still being typed, not a name to match
+  if (f === "-l") return { labels: null, name: "" };
+  if (!f.startsWith("-l ")) return { labels: null, name: filter };
+  const rest = f.slice(3).trim();
+  if (!rest) return { labels: null, name: "" };
+  const i = rest.search(/\s/);
+  if (i === -1) return { labels: rest, name: "" };
+  return { labels: rest.slice(0, i), name: rest.slice(i + 1).trim() };
+}
+
 /** Substring by default; `-r <regex>` for regex. Invalid regex → no match. */
 export function matchRow(name: string, filter: string): boolean {
   const f = filter.trim();

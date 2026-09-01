@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveKind, matchRow, fuzzyKinds, visibleKinds } from "./command";
+import { resolveKind, matchRow, fuzzyKinds, visibleKinds, splitFilter } from "./command";
 import { currentKindLabel } from "./command";
 import { searchEnabled } from "./command";
 import type { ResourceKind } from "./api";
@@ -69,6 +69,48 @@ describe("matchRow", () => {
   });
   it("empty filter matches everything", () => {
     expect(matchRow("anything", "")).toBe(true);
+  });
+});
+
+describe("splitFilter", () => {
+  it("passes a plain filter through as a name filter", () => {
+    expect(splitFilter("web")).toEqual({ labels: null, name: "web" });
+    expect(splitFilter("")).toEqual({ labels: null, name: "" });
+    expect(splitFilter("-r ^web")).toEqual({ labels: null, name: "-r ^web" });
+  });
+
+  it("extracts a label selector on its own", () => {
+    expect(splitFilter("-l app=demo-web")).toEqual({ labels: "app=demo-web", name: "" });
+    expect(splitFilter("  -l app=demo-web,tier!=db  ")).toEqual({
+      labels: "app=demo-web,tier!=db",
+      name: "",
+    });
+  });
+
+  it("extracts a selector plus a trailing name filter", () => {
+    expect(splitFilter("-l app=demo-web web-1")).toEqual({
+      labels: "app=demo-web",
+      name: "web-1",
+    });
+    expect(splitFilter("-l app=demo-web -r ^web")).toEqual({
+      labels: "app=demo-web",
+      name: "-r ^web",
+    });
+  });
+
+  it("treats a bare -l with no selector as no filter at all", () => {
+    expect(splitFilter("-l")).toEqual({ labels: null, name: "" });
+    expect(splitFilter("-l   ")).toEqual({ labels: null, name: "" });
+  });
+
+  it("does not treat -label or -l without a space as a selector", () => {
+    expect(splitFilter("-labels")).toEqual({ labels: null, name: "-labels" });
+  });
+
+  it("keeps the name part usable by matchRow", () => {
+    const { name } = splitFilter("-l app=demo-web -r ^web");
+    expect(matchRow("web-1", name)).toBe(true);
+    expect(matchRow("api-1", name)).toBe(false);
   });
 });
 

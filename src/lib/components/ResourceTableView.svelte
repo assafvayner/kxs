@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { api, type ResourceKind, type ResourceRow } from "../api";
+  import { api, type ResourceKind, type ResourceRow, type ResourceTableEvent } from "../api";
   import type { TabSession } from "../stores/sessions.svelte";
   import { now } from "../stores/now.svelte";
   import { age } from "../age";
-  import { matchRow } from "../command";
+  import { matchRow, splitFilter } from "../command";
+  import { cycleSort, sortIndicator, sortRows, type Sort } from "../sort";
   import VirtualList from "./VirtualList.svelte";
 
   let {
@@ -28,6 +29,11 @@
   let loading = $state(true);
   let watchId: number | null = null;
   let seq = 0;
+  /** Column index + direction, or null for the server's own row order. */
+  let sort = $state<Sort<number> | null>(null);
+  /** Label selector actually in effect; only a settled one restarts the watch. */
+  let labelSelector = $state<string | null>(null);
+  const LABEL_DEBOUNCE_MS = 400;
 
   function stop() {
     if (watchId !== null) {
@@ -38,14 +44,14 @@
 
   // Live table: the backend re-renders the server-side Table on every
   // (debounced) change to this kind and pushes it through the channel.
-  async function start(ns: string | null) {
+  async function start(ns: string | null, selector: string | null) {
     const mySeq = ++seq;
     stop();
     loading = true;
     error = null;
     reconnecting = false;
     try {
-      const id = await api.watchResourceTable(tabId, resourceKind, ns, (ev) => {
+      const onEvent = (ev: ResourceTableEvent) => {
         if (mySeq !== seq) return; // superseded watch: ignore late events
         if (ev.type === "table") {
           columns = ev.table.columns;
@@ -59,7 +65,8 @@
         } else {
           reconnecting = ev.state === "reconnecting";
         }
-      });
+      };
+      const id = await api.watchResourceTable(tabId, resourceKind, ns, onEvent, selector);
       if (mySeq !== seq) {
         // another start() superseded us while awaiting; stop the orphan
         api.stopResourceTable(tabId, id).catch(() => {});
@@ -74,7 +81,12 @@
     }
   }
 
-  const visible = $derived(rows.filter((r) => matchRow(r.name, session.filter)));
+  const filter = $derived(splitFilter(session.filter));
+  // Sorted after filtering so j/k walks exactly what is on screen.
+  const visible = $derived.by(() => {
+    const matched = rows.filter((r) => matchRow(r.name, filter.name));
+    return sort === null ? matched : sortRows(matched, sort.key, sort.dir);
+  });
   const selectedIndex = $derived(
     session.selected === null ? -1 : visible.findIndex((r) => r.key === session.selected),
   );
@@ -86,10 +98,24 @@
 
   onDestroy(stop);
 
-  // Reads session.namespace synchronously, so this fires once on mount and
-  // again whenever the tab's namespace changes, restarting the watch.
+  // A column index only means something for one kind's column set.
   $effect(() => {
-    start(resourceKind.namespaced ? session.namespace : null);
+    void resourceKind;
+    sort = null;
+  });
+
+  // Typing a selector must not spawn a watch per keystroke.
+  $effect(() => {
+    const next = filter.labels;
+    if (next === labelSelector) return;
+    const t = setTimeout(() => (labelSelector = next), LABEL_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  });
+
+  // Reads session.namespace synchronously, so this fires once on mount and
+  // again whenever the tab's namespace or label selector changes.
+  $effect(() => {
+    start(resourceKind.namespaced ? session.namespace : null, labelSelector);
   });
 </script>
 
@@ -103,7 +129,11 @@
       <p class="dim pad">Reconnecting…</p>
     {/if}
     <div class="rtable-head" style="grid-template-columns: repeat({columns.length}, minmax(80px, 1fr));">
-      {#each columns as c}<span>{c}</span>{/each}
+      {#each columns as c, i}<button
+          type="button"
+          class="col-head"
+          onclick={() => (sort = cycleSort(sort, i))}>{c}{sortIndicator(sort, i)}</button
+        >{/each}
     </div>
     <VirtualList items={visible} itemHeight={28} scrollToIndex={selectedIndex}>
       {#snippet row(r: ResourceRow)}

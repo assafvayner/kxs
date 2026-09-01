@@ -141,8 +141,8 @@ pub(crate) fn api_resource(group: &str, version: &str, kind: &str, plural: &str)
     ar
 }
 
-/// Percent-encode a continue token for use as a query value (base64 tokens
-/// can contain '+', '/', '=' which are not query-safe).
+/// Percent-encode a value for use in a query string (base64 continue tokens
+/// can contain '+', '/', '='; label selectors contain '=', ',', '!').
 fn encode_query_value(v: &str) -> String {
     let mut out = String::with_capacity(v.len());
     for b in v.bytes() {
@@ -156,22 +156,29 @@ fn encode_query_value(v: &str) -> String {
     out
 }
 
-/// Server-side Table list for any kind. `namespace: None` = all namespaces.
-/// Follows list continuation up to `MAX_TABLE_PAGES` pages so large clusters
-/// aren't silently truncated at the per-request limit.
+/// Server-side Table list for any kind. `namespace: None` = all namespaces,
+/// `label_selector: None` = no selector. Follows list continuation up to
+/// `MAX_TABLE_PAGES` pages so large clusters aren't silently truncated at the
+/// per-request limit.
 pub async fn list_table(
     client: Client,
     group: &str,
     version: &str,
     plural: &str,
     namespace: Option<&str>,
+    label_selector: Option<&str>,
 ) -> Result<ResourceTable, String> {
     const MAX_TABLE_PAGES: usize = 10;
     let path = list_path(group, version, plural, namespace);
+    let selector = label_selector.filter(|s| !s.is_empty());
     let mut merged: Option<RawTable> = None;
     let mut continue_token: Option<String> = None;
     for _ in 0..MAX_TABLE_PAGES {
         let mut url = format!("{path}?limit=1000");
+        if let Some(s) = selector {
+            url.push_str("&labelSelector=");
+            url.push_str(&encode_query_value(s));
+        }
         if let Some(t) = &continue_token {
             url.push_str("&continue=");
             url.push_str(&encode_query_value(t));
@@ -233,25 +240,42 @@ pub async fn run_table_watch(
     kind: String,
     plural: String,
     namespace: Option<String>,
+    label_selector: Option<String>,
     send: impl Fn(TableEvent) -> bool + Send + 'static,
     stop: tokio::sync::oneshot::Receiver<()>,
 ) {
     let namespace = namespace.filter(|n| !n.is_empty());
+    let label_selector = label_selector.filter(|s| !s.is_empty());
     let ar = api_resource(&group, &version, &kind, &plural);
     let api: Api<DynamicObject> = match namespace.as_deref() {
         Some(ns) => Api::namespaced_with(client.clone(), ns, &ar),
         None => Api::all_with(client.clone(), &ar),
     };
-    let stream = metadata_watcher(api, watcher::Config::default()).boxed();
+    let mut config = watcher::Config::default();
+    if let Some(sel) = label_selector.as_deref() {
+        config = config.labels(sel);
+    }
+    let stream = metadata_watcher(api, config).boxed();
     let fetch = move || {
-        let (client, group, version, plural, namespace) = (
+        let (client, group, version, plural, namespace, label_selector) = (
             client.clone(),
             group.clone(),
             version.clone(),
             plural.clone(),
             namespace.clone(),
+            label_selector.clone(),
         );
-        async move { list_table(client, &group, &version, &plural, namespace.as_deref()).await }
+        async move {
+            list_table(
+                client,
+                &group,
+                &version,
+                &plural,
+                namespace.as_deref(),
+                label_selector.as_deref(),
+            )
+            .await
+        }
     };
     drive_table_events(stream, fetch, TABLE_DEBOUNCE, TABLE_RESYNC, send, stop).await;
 }
@@ -478,6 +502,13 @@ mod tests {
     fn continue_token_query_encoding() {
         assert_eq!(encode_query_value("abc-123_.~"), "abc-123_.~");
         assert_eq!(encode_query_value("a+b/c=="), "a%2Bb%2Fc%3D%3D");
+    }
+    #[test]
+    fn label_selector_query_encoding() {
+        assert_eq!(
+            encode_query_value("app=demo-web,tier!=db"),
+            "app%3Ddemo-web%2Ctier%21%3Ddb"
+        );
     }
 
     #[test]
@@ -756,9 +787,16 @@ mod tests {
     #[ignore]
     async fn lists_deployments_as_table_on_kind_local() {
         let session = kind_session().await;
-        let t = super::list_table(session.client.clone(), "apps", "v1", "deployments", None)
-            .await
-            .unwrap();
+        let t = super::list_table(
+            session.client.clone(),
+            "apps",
+            "v1",
+            "deployments",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(t.columns.iter().any(|c| c == "Name"));
         assert!(t.columns.last().map(|c| c == "Age").unwrap_or(false));
     }
@@ -862,6 +900,7 @@ mod tests {
                 "ConfigMap".into(),
                 "configmaps".into(),
                 Some(NS.into()),
+                None,
                 move |ev| tx.send(ev).is_ok(),
                 stop_rx,
             ));
@@ -884,6 +923,95 @@ mod tests {
         let _ = stop_tx.send(());
         let _ = ns_api.delete(NS, &DeleteParams::default()).await;
         result.unwrap();
+    }
+
+    /// Run manually: cargo test -p kxs-cluster label_selector -- --ignored
+    /// (kind-local only — every other context is production). Read-only: the
+    /// default namespace's demo workloads already carry app=demo-web.
+    #[tokio::test]
+    #[ignore]
+    async fn label_selector_filters_list_and_watch_on_kind_local() {
+        use k8s_openapi::api::core::v1::Pod;
+        use std::collections::BTreeSet;
+
+        const SEL: &str = "app=demo-web";
+        let session = kind_session().await;
+        let client = session.client.clone();
+
+        // ground truth straight from a typed list with the same selector
+        let pod_api: Api<Pod> = Api::namespaced(client.clone(), "default");
+        let expected: BTreeSet<String> = pod_api
+            .list(&ListParams::default().labels(SEL))
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .filter_map(|p| p.metadata.name)
+            .collect();
+        assert!(
+            !expected.is_empty(),
+            "kind-local's default namespace should have {SEL} pods"
+        );
+
+        let names = |t: &ResourceTable| -> BTreeSet<String> {
+            t.rows.iter().map(|r| r.name.clone()).collect()
+        };
+
+        let all = super::list_table(client.clone(), "", "v1", "pods", Some("default"), None)
+            .await
+            .unwrap();
+        let selected =
+            super::list_table(client.clone(), "", "v1", "pods", Some("default"), Some(SEL))
+                .await
+                .unwrap();
+        assert_eq!(names(&selected), expected, "list must apply the selector");
+        assert!(
+            names(&all).is_superset(&expected) && all.rows.len() >= selected.rows.len(),
+            "unfiltered list must be a superset"
+        );
+
+        let empty = super::list_table(
+            client.clone(),
+            "",
+            "v1",
+            "pods",
+            Some("default"),
+            Some("app=kxs-no-such-label"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            empty.rows.is_empty(),
+            "a selector matching nothing must yield no rows: {:?}",
+            names(&empty)
+        );
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(super::run_table_watch(
+            client.clone(),
+            String::new(),
+            "v1".into(),
+            "Pod".into(),
+            "pods".into(),
+            Some("default".into()),
+            Some(SEL.into()),
+            move |ev| tx.send(ev).is_ok(),
+            stop_rx,
+        ));
+        let got = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                match rx.recv().await {
+                    Some(TableEvent::Table { table }) => return names(&table),
+                    Some(_) => continue,
+                    None => panic!("watch ended before any table"),
+                }
+            }
+        })
+        .await
+        .expect("expected a table from the selector watch");
+        let _ = stop_tx.send(());
+        assert_eq!(got, expected, "watch must apply the selector");
     }
 
     async fn kind_session() -> crate::session::ClusterSession {

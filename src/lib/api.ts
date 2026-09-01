@@ -223,10 +223,15 @@ export const api = {
     invoke<SessionInfo>("open_session", { tabId, context }),
   closeSession: (tabId: number) => invoke<void>("close_session", { tabId }),
   listNamespaces: (tabId: number) => invoke<string[]>("list_namespaces", { tabId }),
-  watchPods: (tabId: number, namespace: string | null, onEvent: (e: PodEvent) => void) => {
+  watchPods: (
+    tabId: number,
+    namespace: string | null,
+    onEvent: (e: PodEvent) => void,
+    labelSelector: string | null = null,
+  ) => {
     const channel = new Channel<PodEvent>();
     channel.onmessage = onEvent;
-    return invoke<void>("watch_pods", { tabId, namespace, channel });
+    return invoke<void>("watch_pods", { tabId, namespace, labelSelector, channel });
   },
   listContainers: (tabId: number, namespace: string, pod: string) =>
     invoke<string[]>("list_containers", { tabId, namespace, pod }),
@@ -249,12 +254,22 @@ export const api = {
     version: string,
     plural: string,
     namespace: string | null,
-  ) => invoke<ResourceTable>("list_resource_table", { tabId, group, version, plural, namespace }),
+    labelSelector: string | null = null,
+  ) =>
+    invoke<ResourceTable>("list_resource_table", {
+      tabId,
+      group,
+      version,
+      plural,
+      namespace,
+      labelSelector,
+    }),
   watchResourceTable: (
     tabId: number,
     k: ResourceKind,
     namespace: string | null,
     onEvent: (e: ResourceTableEvent) => void,
+    labelSelector: string | null = null,
   ) => {
     const channel = new Channel<ResourceTableEvent>();
     channel.onmessage = onEvent;
@@ -265,6 +280,7 @@ export const api = {
       kind: k.kind,
       plural: k.plural,
       namespace,
+      labelSelector,
       channel,
     });
   },
