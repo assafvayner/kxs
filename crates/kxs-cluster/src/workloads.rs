@@ -555,6 +555,27 @@ mod tests {
         assert!(ca.value.contains("BEGIN CERTIFICATE"));
     }
 
+    /// A clean namespace for an e2e test. A best-effort create is not enough:
+    /// residue from an aborted run, or the same namespace still terminating
+    /// from the previous run, makes later creates fail — so delete, wait for
+    /// it to disappear, then create fresh.
+    async fn fresh_namespace(client: &Client, name: &str) {
+        use k8s_openapi::api::core::v1::Namespace;
+        use kube::api::DeleteParams;
+        let api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(client.clone());
+        let _ = api.delete(name, &DeleteParams::default()).await;
+        for _ in 0..120 {
+            match api.get_opt(name).await {
+                Ok(None) => break,
+                _ => tokio::time::sleep(std::time::Duration::from_millis(500)).await,
+            }
+        }
+        let ns: Namespace = serde_json::from_value(json!({"metadata": {"name": name}})).unwrap();
+        api.create(&PostParams::default(), &ns)
+            .await
+            .expect("create test namespace");
+    }
+
     /// Creates a throwaway CronJob in its own namespace (other tests create
     /// and tear down kxs-e2e concurrently), triggers it, flips suspend, and
     /// cleans up the namespace.
@@ -568,8 +589,7 @@ mod tests {
         let client = s.client.clone();
 
         let ns_api: Api<Namespace> = Api::all(client.clone());
-        let ns: Namespace = serde_json::from_value(json!({"metadata": {"name": NS}})).unwrap();
-        let _ = ns_api.create(&PostParams::default(), &ns).await;
+        fresh_namespace(&client, NS).await;
 
         let cjs: Api<CronJob> = Api::namespaced(client.clone(), NS);
         let cj: CronJob = serde_json::from_value(json!({
@@ -630,8 +650,7 @@ mod tests {
         let client = s.client.clone();
 
         let ns_api: Api<Namespace> = Api::all(client.clone());
-        let ns: Namespace = serde_json::from_value(json!({"metadata": {"name": NS}})).unwrap();
-        let _ = ns_api.create(&PostParams::default(), &ns).await;
+        fresh_namespace(&client, NS).await;
 
         let deps: Api<Deployment> = Api::namespaced(client.clone(), NS);
         let dep: Deployment = serde_json::from_value(json!({
@@ -659,13 +678,15 @@ mod tests {
         .await
         .unwrap();
 
-        // wait until both revisions' ReplicaSets exist
+        // Wait until both revisions' ReplicaSets exist AND the deployment's
+        // revision annotation has caught up (it trails the new RS briefly, and
+        // `current` is derived from it).
         let mut revs = Vec::new();
         for _ in 0..30 {
             revs = rollout_history(client.clone(), NS, "kxs-roll")
                 .await
                 .unwrap();
-            if revs.len() >= 2 {
+            if revs.len() >= 2 && revs[0].current {
                 break;
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
