@@ -23,6 +23,8 @@ pub struct LogRequest {
     pub tail_lines: Option<i64>,
     pub since_seconds: Option<i64>,
     pub timestamps: bool,
+    /// Read the previous container instance's log (kubectl logs -p).
+    pub previous: bool,
 }
 
 pub async fn list_containers(
@@ -56,6 +58,7 @@ pub async fn run_log_stream(
         tail_lines: req.tail_lines,
         since_seconds: req.since_seconds,
         timestamps: req.timestamps,
+        previous: req.previous,
         ..Default::default()
     };
     let reader = match api.log_stream(&req.pod, &params).await {
@@ -109,6 +112,33 @@ pub async fn run_log_stream(
 mod tests {
     use super::*;
 
+    #[test]
+    fn deserializes_camel_case_request() {
+        let req: LogRequest = serde_json::from_str(
+            r#"{"namespace":"default","pod":"p","container":"c","follow":true,
+                "tailLines":100,"sinceSeconds":300,"timestamps":true,"previous":true}"#,
+        )
+        .unwrap();
+        assert_eq!(req.namespace, "default");
+        assert_eq!(req.container.as_deref(), Some("c"));
+        assert!(req.follow);
+        assert_eq!(req.tail_lines, Some(100));
+        assert_eq!(req.since_seconds, Some(300));
+        assert!(req.timestamps);
+        assert!(req.previous);
+    }
+
+    #[test]
+    fn deserializes_omitted_optionals_as_none() {
+        let req: LogRequest = serde_json::from_str(
+            r#"{"namespace":"default","pod":"p","follow":false,"timestamps":false,"previous":false}"#,
+        )
+        .unwrap();
+        assert!(req.container.is_none());
+        assert!(req.tail_lines.is_none());
+        assert!(req.since_seconds.is_none());
+    }
+
     /// Run manually: cargo test -p kxs-cluster -- --ignored (needs kind-local in ~/.kube/config)
     #[tokio::test]
     #[ignore]
@@ -134,6 +164,7 @@ mod tests {
             tail_lines: Some(5),
             since_seconds: None,
             timestamps: false,
+            previous: false,
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let (_stop, stop_rx) = tokio::sync::oneshot::channel();
