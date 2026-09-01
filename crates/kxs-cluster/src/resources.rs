@@ -1,8 +1,11 @@
 use futures::StreamExt;
 use kube::api::{Api, DynamicObject, ListParams};
 use kube::core::{ApiResource, GroupVersionKind};
+use kube::runtime::{metadata_watcher, watcher};
 use kube::Client;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::time::Duration;
 
 pub fn list_path(group: &str, version: &str, plural: &str, namespace: Option<&str>) -> String {
     let prefix = if group.is_empty() {
@@ -195,6 +198,140 @@ pub async fn list_table(
         column_definitions: Vec::new(),
         rows: Vec::new(),
     })))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum TableEvent {
+    /// A full server-rendered table; replaces whatever the view holds.
+    Table { table: ResourceTable },
+    Status {
+        state: String,
+        message: Option<String>,
+    },
+}
+
+/// Watcher churn (a rollout touches every pod) is coalesced into at most one
+/// Table re-fetch per window, measured from the first change so latency stays
+/// bounded even under continuous churn.
+const TABLE_DEBOUNCE: Duration = Duration::from_millis(300);
+/// Safety net for kinds whose watch never establishes (discovery lists
+/// resources without checking the `watch` verb) and for events lost between
+/// relists. Far cheaper than the 5s poll it replaces.
+const TABLE_RESYNC: Duration = Duration::from_secs(30);
+
+/// Watches object metadata for one kind and pushes a freshly rendered
+/// server-side Table through `send` on every (debounced) change, until `send`
+/// returns false (receiver gone) or `stop` fires. Metadata-only watches keep
+/// the streamed payload small; the rows themselves always come from the
+/// apiserver's Table printer.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_table_watch(
+    client: Client,
+    group: String,
+    version: String,
+    kind: String,
+    plural: String,
+    namespace: Option<String>,
+    send: impl Fn(TableEvent) -> bool + Send + 'static,
+    stop: tokio::sync::oneshot::Receiver<()>,
+) {
+    let namespace = namespace.filter(|n| !n.is_empty());
+    let ar = api_resource(&group, &version, &kind, &plural);
+    let api: Api<DynamicObject> = match namespace.as_deref() {
+        Some(ns) => Api::namespaced_with(client.clone(), ns, &ar),
+        None => Api::all_with(client.clone(), &ar),
+    };
+    let stream = metadata_watcher(api, watcher::Config::default()).boxed();
+    let fetch = move || {
+        let (client, group, version, plural, namespace) = (
+            client.clone(),
+            group.clone(),
+            version.clone(),
+            plural.clone(),
+            namespace.clone(),
+        );
+        async move { list_table(client, &group, &version, &plural, namespace.as_deref()).await }
+    };
+    drive_table_events(stream, fetch, TABLE_DEBOUNCE, TABLE_RESYNC, send, stop).await;
+}
+
+async fn emit_table<F, Fut>(fetch: &F, send: &impl Fn(TableEvent) -> bool) -> bool
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<ResourceTable, String>>,
+{
+    match fetch().await {
+        Ok(table) => send(TableEvent::Table { table }),
+        Err(message) => send(TableEvent::Status {
+            state: "error".into(),
+            message: Some(message),
+        }),
+    }
+}
+
+/// Turns a stream of watcher events into debounced Table re-fetches. Generic
+/// over the watched object because only the fact that *something* changed
+/// matters — which also makes the debounce/reconnect logic unit-testable.
+pub async fn drive_table_events<S, T, F, Fut>(
+    mut stream: S,
+    fetch: F,
+    debounce: Duration,
+    resync: Duration,
+    send: impl Fn(TableEvent) -> bool + Send,
+    mut stop: tokio::sync::oneshot::Receiver<()>,
+) where
+    S: futures::Stream<Item = Result<watcher::Event<T>, watcher::Error>> + Unpin,
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<ResourceTable, String>>,
+{
+    // First table goes out immediately; the initial watch relist is slower and
+    // its objects carry no printer columns anyway.
+    if !emit_table(&fetch, &send).await {
+        return;
+    }
+    let mut first_relist = true;
+    let mut deadline: Option<tokio::time::Instant> = None;
+    let mut resync_tick = tokio::time::interval_at(tokio::time::Instant::now() + resync, resync);
+    resync_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        let pending_deadline = deadline;
+        tokio::select! {
+            _ = &mut stop => return,
+            _ = resync_tick.tick() => {
+                deadline.get_or_insert_with(|| tokio::time::Instant::now() + debounce);
+            }
+            _ = async move {
+                match pending_deadline {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                deadline = None;
+                if !emit_table(&fetch, &send).await { return; }
+            }
+            item = stream.next() => match item {
+                Some(Ok(watcher::Event::Init | watcher::Event::InitApply(_))) => {}
+                Some(Ok(watcher::Event::InitDone)) => {
+                    if !send(TableEvent::Status { state: "live".into(), message: None }) { return; }
+                    // A relist means the watch was re-established, so changes may
+                    // have been missed; the very first one is covered above.
+                    if first_relist {
+                        first_relist = false;
+                    } else {
+                        deadline.get_or_insert_with(|| tokio::time::Instant::now() + debounce);
+                    }
+                }
+                Some(Ok(watcher::Event::Apply(_) | watcher::Event::Delete(_))) => {
+                    deadline.get_or_insert_with(|| tokio::time::Instant::now() + debounce);
+                }
+                Some(Err(e)) => {
+                    if !send(TableEvent::Status { state: "reconnecting".into(), message: Some(e.to_string()) }) { return; }
+                }
+                None => return,
+            }
+        }
+    }
 }
 
 /// Full manifest as YAML for one object.
@@ -411,6 +548,209 @@ mod tests {
         assert_eq!(t.rows[0].cells, vec!["web-1"], "server age cell dropped");
     }
 
+    mod table_watch {
+        use super::super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        const DEBOUNCE: Duration = Duration::from_millis(50);
+        /// long enough that only the tests that want it will see a tick
+        const NO_RESYNC: Duration = Duration::from_secs(3600);
+
+        fn table(n: usize) -> ResourceTable {
+            ResourceTable {
+                columns: vec!["Name".into(), "Age".into()],
+                rows: (0..n)
+                    .map(|i| ResourceRow {
+                        key: format!("d/r{i}"),
+                        name: format!("r{i}"),
+                        namespace: Some("d".into()),
+                        cells: vec![format!("r{i}")],
+                        created: None,
+                    })
+                    .collect(),
+            }
+        }
+
+        /// Drives `events` (followed by a never-ending tail so the loop stays
+        /// alive) for `window`, returning everything sent plus the fetch count.
+        async fn drive(
+            events: Vec<Result<watcher::Event<()>, watcher::Error>>,
+            window: Duration,
+        ) -> (Vec<TableEvent>, usize) {
+            drive_with_resync(events, window, NO_RESYNC).await
+        }
+
+        async fn drive_with_resync(
+            events: Vec<Result<watcher::Event<()>, watcher::Error>>,
+            window: Duration,
+            resync: Duration,
+        ) -> (Vec<TableEvent>, usize) {
+            let fetches = Arc::new(AtomicUsize::new(0));
+            let counter = fetches.clone();
+            let fetch = move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                async move { Ok(table(n)) }
+            };
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+            let src = futures::stream::iter(events).chain(futures::stream::pending());
+            let handle = tokio::spawn(drive_table_events(
+                src,
+                fetch,
+                DEBOUNCE,
+                resync,
+                move |ev| tx.send(ev).is_ok(),
+                stop_rx,
+            ));
+            let mut got = Vec::new();
+            let deadline = tokio::time::Instant::now() + window;
+            while let Ok(Some(ev)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+                got.push(ev);
+            }
+            let _ = stop_tx.send(());
+            tokio::time::timeout(Duration::from_secs(2), handle)
+                .await
+                .expect("drive_table_events must return once stopped")
+                .unwrap();
+            (got, fetches.load(Ordering::SeqCst))
+        }
+
+        fn tables(evs: &[TableEvent]) -> Vec<&ResourceTable> {
+            evs.iter()
+                .filter_map(|e| match e {
+                    TableEvent::Table { table } => Some(table),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn states(evs: &[TableEvent]) -> Vec<&str> {
+            evs.iter()
+                .filter_map(|e| match e {
+                    TableEvent::Status { state, .. } => Some(state.as_str()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn first_table_precedes_any_watch_event() {
+            let (got, fetches) = drive(Vec::new(), Duration::from_millis(200)).await;
+            assert!(
+                matches!(got.first(), Some(TableEvent::Table { .. })),
+                "expected an immediate table, got {got:?}"
+            );
+            assert_eq!(fetches, 1, "no watch events, so no re-fetch");
+        }
+
+        #[tokio::test]
+        async fn initial_relist_does_not_refetch() {
+            let events = vec![
+                Ok(watcher::Event::Init),
+                Ok(watcher::Event::InitApply(())),
+                Ok(watcher::Event::InitApply(())),
+                Ok(watcher::Event::InitDone),
+            ];
+            let (got, fetches) = drive(events, Duration::from_millis(300)).await;
+            assert_eq!(fetches, 1, "the immediate table already covers the relist");
+            assert_eq!(states(&got), vec!["live"]);
+        }
+
+        #[tokio::test]
+        async fn burst_of_changes_is_coalesced_into_one_refetch() {
+            let mut events = vec![Ok(watcher::Event::Init), Ok(watcher::Event::InitDone)];
+            for _ in 0..20 {
+                events.push(Ok(watcher::Event::Apply(())));
+            }
+            events.push(Ok(watcher::Event::Delete(())));
+            let (got, fetches) = drive(events, Duration::from_millis(400)).await;
+            assert_eq!(fetches, 2, "initial fetch plus one debounced refetch");
+            assert_eq!(tables(&got).len(), 2);
+        }
+
+        #[tokio::test]
+        async fn reconnect_relist_refetches_and_reports_status() {
+            let events = vec![
+                Ok(watcher::Event::Init),
+                Ok(watcher::Event::InitDone),
+                Err(watcher::Error::NoResourceVersion),
+                Ok(watcher::Event::Init),
+                Ok(watcher::Event::InitApply(())),
+                Ok(watcher::Event::InitDone),
+            ];
+            let (got, fetches) = drive(events, Duration::from_millis(400)).await;
+            assert_eq!(fetches, 2, "a re-established watch may have missed changes");
+            assert_eq!(states(&got), vec!["live", "reconnecting", "live"]);
+        }
+
+        #[tokio::test]
+        async fn resync_refetches_without_watch_events() {
+            // a kind that cannot be watched at all: only the resync moves the table on
+            let events = vec![Err(watcher::Error::NoResourceVersion)];
+            let (got, fetches) = drive_with_resync(
+                events,
+                Duration::from_millis(600),
+                Duration::from_millis(150),
+            )
+            .await;
+            assert!(fetches >= 3, "expected repeated resyncs, got {fetches}");
+            assert_eq!(states(&got), vec!["reconnecting"]);
+        }
+
+        #[tokio::test]
+        async fn fetch_failure_becomes_error_status_and_a_dead_receiver_ends_the_watch() {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+            let (events, event_stream) =
+                futures::channel::mpsc::unbounded::<Result<watcher::Event<()>, watcher::Error>>();
+            let handle = tokio::spawn(drive_table_events(
+                event_stream,
+                || async { Err("403 forbidden".to_string()) },
+                DEBOUNCE,
+                NO_RESYNC,
+                move |ev| tx.send(ev).is_ok(),
+                stop_rx,
+            ));
+            match rx.recv().await.unwrap() {
+                TableEvent::Status { state, message } => {
+                    assert_eq!(state, "error");
+                    assert_eq!(message.as_deref(), Some("403 forbidden"));
+                }
+                other => panic!("expected an error status, got {other:?}"),
+            }
+            drop(rx);
+            // the next send() fails, which must end the watch
+            events
+                .unbounded_send(Ok(watcher::Event::Apply(())))
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), handle)
+                .await
+                .expect("drive_table_events must return once the receiver is gone")
+                .unwrap();
+        }
+
+        #[tokio::test]
+        async fn stop_ends_the_loop() {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+            let handle = tokio::spawn(drive_table_events(
+                futures::stream::pending::<Result<watcher::Event<()>, watcher::Error>>(),
+                || async { Ok(table(1)) },
+                DEBOUNCE,
+                NO_RESYNC,
+                move |ev| tx.send(ev).is_ok(),
+                stop_rx,
+            ));
+            assert!(matches!(rx.recv().await, Some(TableEvent::Table { .. })));
+            stop_tx.send(()).unwrap();
+            tokio::time::timeout(Duration::from_secs(2), handle)
+                .await
+                .expect("drive_table_events must return once stopped")
+                .unwrap();
+        }
+    }
+
     /// Run manually: cargo test -p kxs-cluster -- --ignored (needs kind-local in ~/.kube/config)
     #[tokio::test]
     #[ignore]
@@ -467,6 +807,83 @@ mod tests {
             !keys.contains(&"batch/CronJob".to_string()),
             "unexpected CronJob: {keys:?}"
         );
+    }
+
+    /// Run manually: cargo test -p kxs-cluster table_watch_reflects -- --ignored
+    /// (needs kind-local in ~/.kube/config). Creates and deletes ConfigMaps in
+    /// a dedicated namespace, which is removed afterwards.
+    #[tokio::test]
+    #[ignore]
+    async fn table_watch_reflects_changes_on_kind_local() {
+        use k8s_openapi::api::core::v1::{ConfigMap, Namespace};
+        use kube::api::{DeleteParams, PostParams};
+
+        const NS: &str = "kxs-e2e-watch";
+        fn cm(name: &str) -> ConfigMap {
+            serde_json::from_value(serde_json::json!({"metadata": {"name": name}})).unwrap()
+        }
+        async fn next_table(
+            rx: &mut tokio::sync::mpsc::UnboundedReceiver<TableEvent>,
+            has: impl Fn(&ResourceTable) -> bool,
+        ) -> Result<(), String> {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                match tokio::time::timeout_at(deadline, rx.recv()).await {
+                    Ok(Some(TableEvent::Table { table })) if has(&table) => return Ok(()),
+                    Ok(Some(_)) => continue,
+                    Ok(None) => return Err("watch ended".into()),
+                    Err(_) => return Err("timed out waiting for a matching table".into()),
+                }
+            }
+        }
+
+        let session = kind_session().await;
+        let client = session.client.clone();
+        let ns_api: Api<Namespace> = Api::all(client.clone());
+        let _ = ns_api
+            .create(
+                &PostParams::default(),
+                &serde_json::from_value(serde_json::json!({"metadata": {"name": NS}})).unwrap(),
+            )
+            .await;
+
+        let cm_api: Api<ConfigMap> = Api::namespaced(client.clone(), NS);
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let result = async {
+            cm_api
+                .create(&PostParams::default(), &cm("probe-a"))
+                .await
+                .map_err(|e| format!("create probe-a: {e}"))?;
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(super::run_table_watch(
+                client.clone(),
+                String::new(),
+                "v1".into(),
+                "ConfigMap".into(),
+                "configmaps".into(),
+                Some(NS.into()),
+                move |ev| tx.send(ev).is_ok(),
+                stop_rx,
+            ));
+            let has =
+                |name: &'static str| move |t: &ResourceTable| t.rows.iter().any(|r| r.name == name);
+            // the immediate first table must already carry existing objects
+            next_table(&mut rx, has("probe-a")).await?;
+            cm_api
+                .create(&PostParams::default(), &cm("probe-b"))
+                .await
+                .map_err(|e| format!("create probe-b: {e}"))?;
+            next_table(&mut rx, has("probe-b")).await?;
+            cm_api
+                .delete("probe-b", &DeleteParams::default())
+                .await
+                .map_err(|e| format!("delete probe-b: {e}"))?;
+            next_table(&mut rx, |t| !has("probe-b")(t)).await
+        }
+        .await;
+        let _ = stop_tx.send(());
+        let _ = ns_api.delete(NS, &DeleteParams::default()).await;
+        result.unwrap();
     }
 
     async fn kind_session() -> crate::session::ClusterSession {
