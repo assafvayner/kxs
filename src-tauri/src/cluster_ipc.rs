@@ -18,11 +18,14 @@ pub struct Sessions(pub Arc<Mutex<HashMap<u32, SessionHandle>>>);
 /// SessionHandle (replaced by a reconnect) can never prune a same-numbered
 /// stop entry belonging to the replacement handle.
 static NEXT_LOG_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Table watch ids are process-global for the same reason as NEXT_LOG_ID.
+static NEXT_TABLE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 pub struct SessionHandle {
     pub session: Arc<ClusterSession>,
     pub pod_stop: Option<oneshot::Sender<()>>,
     pub log_stops: HashMap<u32, oneshot::Sender<()>>,
+    pub table_stops: HashMap<u32, oneshot::Sender<()>>,
     pub execs: HashMap<u32, ExecHandle>,
     pub next_exec_id: u32,
     pub forwards: HashMap<u32, (ForwardTarget, oneshot::Sender<()>)>,
@@ -43,6 +46,9 @@ impl SessionHandle {
             let _ = stop.send(());
         }
         for (_, stop) in self.log_stops {
+            let _ = stop.send(());
+        }
+        for (_, stop) in self.table_stops {
             let _ = stop.send(());
         }
         for (_, handle) in self.execs {
@@ -103,6 +109,7 @@ pub async fn open_session(
             session: Arc::new(session),
             pod_stop: None,
             log_stops: HashMap::new(),
+            table_stops: HashMap::new(),
             execs: HashMap::new(),
             next_exec_id: 0,
             forwards: HashMap::new(),
@@ -264,6 +271,64 @@ pub async fn list_resource_table(
         namespace.as_deref(),
     )
     .await
+}
+
+/// Live table for one kind: streams a full server-rendered ResourceTable on
+/// every (debounced) cluster change. Returns the watch id to pass to
+/// `stop_resource_table`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn watch_resource_table(
+    tab_id: u32,
+    group: String,
+    version: String,
+    kind: String,
+    plural: String,
+    namespace: Option<String>,
+    channel: Channel<kxs_cluster::resources::TableEvent>,
+    sessions: State<'_, Sessions>,
+) -> Result<u32, String> {
+    let (stop_tx, stop_rx) = oneshot::channel();
+    let (client, id) = {
+        let mut map = sessions.0.lock().await;
+        let handle = map.get_mut(&tab_id).ok_or("no session for tab")?;
+        let id = NEXT_TABLE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        handle.table_stops.insert(id, stop_tx);
+        (handle.session.client.clone(), id)
+    };
+    let map = sessions.0.clone();
+    tauri::async_runtime::spawn(async move {
+        kxs_cluster::resources::run_table_watch(
+            client,
+            group,
+            version,
+            kind,
+            plural,
+            namespace,
+            move |ev| channel.send(ev).is_ok(),
+            stop_rx,
+        )
+        .await;
+        // prune our own stop entry once the watch ends (stop or receiver gone)
+        if let Some(handle) = map.lock().await.get_mut(&tab_id) {
+            handle.table_stops.remove(&id);
+        }
+    });
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn stop_resource_table(
+    tab_id: u32,
+    watch_id: u32,
+    sessions: State<'_, Sessions>,
+) -> Result<(), String> {
+    if let Some(handle) = sessions.0.lock().await.get_mut(&tab_id) {
+        if let Some(stop) = handle.table_stops.remove(&watch_id) {
+            let _ = stop.send(());
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]

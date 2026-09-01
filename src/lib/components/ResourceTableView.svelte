@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy } from "svelte";
   import { api, type ResourceKind, type ResourceRow } from "../api";
   import type { TabSession } from "../stores/sessions.svelte";
   import { now } from "../stores/now.svelte";
@@ -24,20 +24,53 @@
   let columns = $state<string[]>([]);
   let rows = $state<ResourceRow[]>([]);
   let error = $state<string | null>(null);
+  let reconnecting = $state(false);
   let loading = $state(true);
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let watchId: number | null = null;
+  let seq = 0;
 
-  async function refresh() {
+  function stop() {
+    if (watchId !== null) {
+      api.stopResourceTable(tabId, watchId).catch(() => {});
+      watchId = null;
+    }
+  }
+
+  // Live table: the backend re-renders the server-side Table on every
+  // (debounced) change to this kind and pushes it through the channel.
+  async function start(ns: string | null) {
+    const mySeq = ++seq;
+    stop();
+    loading = true;
+    error = null;
+    reconnecting = false;
     try {
-      const ns = resourceKind.namespaced ? session.namespace : null;
-      const t = await api.listResourceTable(tabId, resourceKind.group, resourceKind.version, resourceKind.plural, ns);
-      columns = t.columns;
-      rows = t.rows;
-      error = null;
+      const id = await api.watchResourceTable(tabId, resourceKind, ns, (ev) => {
+        if (mySeq !== seq) return; // superseded watch: ignore late events
+        if (ev.type === "table") {
+          columns = ev.table.columns;
+          rows = ev.table.rows;
+          error = null;
+          loading = false;
+        } else if (ev.state === "error") {
+          error = ev.message ?? "watch failed";
+          loading = false;
+          reconnecting = false;
+        } else {
+          reconnecting = ev.state === "reconnecting";
+        }
+      });
+      if (mySeq !== seq) {
+        // another start() superseded us while awaiting; stop the orphan
+        api.stopResourceTable(tabId, id).catch(() => {});
+        return;
+      }
+      watchId = id;
     } catch (e) {
-      error = String(e);
-    } finally {
-      loading = false;
+      if (mySeq === seq) {
+        error = String(e);
+        loading = false;
+      }
     }
   }
 
@@ -51,22 +84,24 @@
     session.visibleKeys = visible.map((r) => r.key);
   });
 
-  onMount(() => {
-    timer = setInterval(refresh, 5000);
-  });
-  onDestroy(() => clearInterval(timer));
+  onDestroy(stop);
 
-  // Reads session.namespace (via refresh) synchronously on each run, so this
-  // fires once on mount and again whenever the tab's namespace changes.
+  // Reads session.namespace synchronously, so this fires once on mount and
+  // again whenever the tab's namespace changes, restarting the watch.
   $effect(() => {
-    refresh();
+    start(resourceKind.namespaced ? session.namespace : null);
   });
 </script>
 
 <div class="rtable">
-  {#if error}
+  {#if error && rows.length === 0}
     <div class="connect-error"><pre class="mono">{error}</pre></div>
   {:else}
+    {#if error}
+      <p class="dim pad">{error}</p>
+    {:else if reconnecting}
+      <p class="dim pad">Reconnecting…</p>
+    {/if}
     <div class="rtable-head" style="grid-template-columns: repeat({columns.length}, minmax(80px, 1fr));">
       {#each columns as c}<span>{c}</span>{/each}
     </div>

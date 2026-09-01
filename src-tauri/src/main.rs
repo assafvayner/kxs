@@ -40,6 +40,8 @@ fn main() {
             cluster_ipc::list_resource_kinds,
             cluster_ipc::list_present_kinds,
             cluster_ipc::list_resource_table,
+            cluster_ipc::watch_resource_table,
+            cluster_ipc::stop_resource_table,
             cluster_ipc::get_resource_yaml,
             cluster_ipc::get_resource_events,
             cluster_ipc::apply_resource_yaml,

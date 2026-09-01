@@ -126,6 +126,9 @@ export interface ResourceTable {
   columns: string[];
   rows: ResourceRow[];
 }
+export type ResourceTableEvent =
+  | { type: "table"; table: ResourceTable }
+  | { type: "status"; state: string; message: string | null };
 export interface ResourceEvent {
   type: string;
   reason: string;
@@ -210,6 +213,26 @@ export const api = {
     plural: string,
     namespace: string | null,
   ) => invoke<ResourceTable>("list_resource_table", { tabId, group, version, plural, namespace }),
+  watchResourceTable: (
+    tabId: number,
+    k: ResourceKind,
+    namespace: string | null,
+    onEvent: (e: ResourceTableEvent) => void,
+  ) => {
+    const channel = new Channel<ResourceTableEvent>();
+    channel.onmessage = onEvent;
+    return invoke<number>("watch_resource_table", {
+      tabId,
+      group: k.group,
+      version: k.version,
+      kind: k.kind,
+      plural: k.plural,
+      namespace,
+      channel,
+    });
+  },
+  stopResourceTable: (tabId: number, watchId: number) =>
+    invoke<void>("stop_resource_table", { tabId, watchId }),
   getResourceYaml: (tabId: number, k: ResourceKind, namespace: string | null, name: string) =>
     invoke<string>("get_resource_yaml", {
       tabId,
