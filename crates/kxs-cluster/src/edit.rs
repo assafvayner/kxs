@@ -558,22 +558,10 @@ mod tests {
     #[ignore]
     async fn apply_dryrun_then_apply_then_delete_configmap() {
         let s = kind_session().await;
-        // ensure namespace exists (best-effort apply)
-        let ns_yaml = "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: kxs-e2e\n";
-        let _ = apply_yaml(
-            s.client.clone(),
-            "",
-            "v1",
-            "Namespace",
-            "namespaces",
-            None,
-            "kxs-e2e",
-            ns_yaml,
-            false,
-        )
-        .await;
+        // own namespace: sharing one with other tests races their cleanup
+        fresh_namespace(&s.client, "kxs-e2e-cm").await;
 
-        let cm = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: kxs-t\n  namespace: kxs-e2e\ndata:\n  a: \"1\"\n";
+        let cm = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: kxs-t\n  namespace: kxs-e2e-cm\ndata:\n  a: \"1\"\n";
         // dry-run must not persist
         apply_yaml(
             s.client.clone(),
@@ -581,7 +569,7 @@ mod tests {
             "v1",
             "ConfigMap",
             "configmaps",
-            Some("kxs-e2e"),
+            Some("kxs-e2e-cm"),
             "kxs-t",
             cm,
             true,
@@ -594,7 +582,7 @@ mod tests {
             "v1",
             "ConfigMap",
             "configmaps",
-            Some("kxs-e2e"),
+            Some("kxs-e2e-cm"),
             "kxs-t",
         )
         .await;
@@ -606,7 +594,7 @@ mod tests {
             "v1",
             "ConfigMap",
             "configmaps",
-            Some("kxs-e2e"),
+            Some("kxs-e2e-cm"),
             "kxs-t",
             cm,
             false,
@@ -619,7 +607,7 @@ mod tests {
             "v1",
             "ConfigMap",
             "configmaps",
-            Some("kxs-e2e"),
+            Some("kxs-e2e-cm"),
             "kxs-t",
         )
         .await
@@ -632,7 +620,7 @@ mod tests {
             "v1",
             "ConfigMap",
             "configmaps",
-            Some("kxs-e2e"),
+            Some("kxs-e2e-cm"),
             "kxs-t",
             None,
             false,
@@ -647,7 +635,7 @@ mod tests {
             "Namespace",
             "namespaces",
             None,
-            "kxs-e2e",
+            "kxs-e2e-cm",
             None,
             false,
         )
