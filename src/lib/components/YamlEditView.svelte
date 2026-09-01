@@ -52,7 +52,7 @@
 
   function vimStatus(s: VimState): string {
     if (s.mode === "ex") return ":" + s.exBuf;
-    if (s.mode === "search") return "/" + s.searchBuf;
+    if (s.mode === "search") return (s.searchBackward ? "?" : "/") + s.searchBuf;
     return s.mode === "insert" ? "-- INSERT --" : "-- NORMAL --";
   }
 
