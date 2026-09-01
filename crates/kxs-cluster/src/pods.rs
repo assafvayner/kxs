@@ -254,6 +254,7 @@ impl Batcher {
 pub async fn run_pod_watch(
     client: Client,
     namespace: Option<String>,
+    label_selector: Option<String>,
     send: impl Fn(PodEvent) -> bool + Send + 'static,
     stop: tokio::sync::oneshot::Receiver<()>,
 ) {
@@ -261,7 +262,11 @@ pub async fn run_pod_watch(
         Some(ns) if !ns.is_empty() => Api::namespaced(client, ns),
         _ => Api::all(client),
     };
-    let stream = watcher(api, watcher::Config::default()).boxed();
+    let mut config = watcher::Config::default();
+    if let Some(sel) = label_selector.as_deref().filter(|s| !s.is_empty()) {
+        config = config.labels(sel);
+    }
+    let stream = watcher(api, config).boxed();
     drive_pod_events(stream, send, stop).await;
 }
 
@@ -678,6 +683,7 @@ mod tests {
         let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(run_pod_watch(
             session.client.clone(),
+            None,
             None,
             move |ev| tx.send(ev).is_ok(),
             stop_rx,

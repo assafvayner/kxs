@@ -13,7 +13,8 @@
     moveSelection,
     type ClusterActions,
   } from "../clusterKeys";
-  import { currentKindLabel, searchEnabled, matchRow } from "../command";
+  import { currentKindLabel, searchEnabled, matchRow, splitFilter } from "../command";
+  import { cycleSort, sortIndicator, sortPods, type PodField, type Sort } from "../sort";
   import {
     menuItemsFor,
     SCALABLE_KINDS,
@@ -83,6 +84,7 @@
       }
       s.version = info.version;
       s.namespace = info.defaultNamespace || null;
+      // the watch itself is started by the effect that tracks namespace + selector
       s.status = "ready";
       api
         .listNamespaces(tabId)
@@ -95,7 +97,6 @@
           refreshPresentKinds();
         })
         .catch(() => {});
-      await startWatch();
     } catch (e) {
       if (destroyed) return;
       s.status = "error";
@@ -103,17 +104,22 @@
     }
   }
 
-  async function startWatch() {
+  async function startWatch(namespace: string | null, labelSelector: string | null) {
     s.watchState = "starting";
     s.pods.apply({ type: "snapshot", rows: [] });
     try {
-      await api.watchPods(tabId, s.namespace, (ev) => {
-        if (ev.type === "status") {
-          s.watchState = ev.state === "reconnecting" ? "reconnecting" : "live";
-        } else {
-          s.pods.apply(ev);
-        }
-      });
+      await api.watchPods(
+        tabId,
+        namespace,
+        (ev) => {
+          if (ev.type === "status") {
+            s.watchState = ev.state === "reconnecting" ? "reconnecting" : "live";
+          } else {
+            s.pods.apply(ev);
+          }
+        },
+        labelSelector,
+      );
     } catch (e) {
       s.status = "error";
       s.error = String(e);
@@ -131,8 +137,8 @@
     }
   }
 
+  // The pods watch restarts via the effect below; only the picker needs a nudge.
   function onNamespaceChange() {
-    startWatch();
     refreshPresentKinds();
   }
 
@@ -150,10 +156,44 @@
     return top.kind === "resource" ? top.resourceKind : POD_KIND;
   }
 
-  const podsVisible = $derived(s.pods.rows.filter((p) => matchRow(p.name, s.filter)));
+  const POD_COLUMNS: [string, PodField][] = [
+    ["NAMESPACE", "namespace"],
+    ["NAME", "name"],
+    ["READY", "ready"],
+    ["STATUS", "status"],
+    ["RESTARTS", "restarts"],
+    ["IP", "ip"],
+    ["NODE", "node"],
+    ["AGE", "age"],
+  ];
+
+  let podSort = $state<Sort<PodField> | null>(null);
+  /** Label selector actually in effect; only a settled one restarts the watch. */
+  let podLabels = $state<string | null>(null);
+  const LABEL_DEBOUNCE_MS = 400;
+
+  const filter = $derived(splitFilter(s.filter));
+  // Sorted after filtering so j/k walks exactly what is on screen.
+  const podsVisible = $derived.by(() => {
+    const matched = s.pods.rows.filter((p) => matchRow(p.name, filter.name));
+    return podSort === null ? matched : sortPods(matched, podSort.key, podSort.dir);
+  });
   const podsSelectedIndex = $derived(
     s.selected === null ? -1 : podsVisible.findIndex((p) => p.key === s.selected),
   );
+
+  // Typing a selector must not spawn a watch per keystroke.
+  $effect(() => {
+    const next = filter.labels;
+    if (next === podLabels) return;
+    const t = setTimeout(() => (podLabels = next), LABEL_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  });
+
+  $effect(() => {
+    if (s.status !== "ready") return;
+    startWatch(s.namespace, podLabels);
+  });
 
   // The pods table lives in this component, so it publishes its visible keys
   // here; ResourceTableView does the same for resource views.
@@ -691,6 +731,9 @@
         {/each}
       </nav>
       <span class="spacer"></span>
+      {#if filter.labels}
+        <span class="dim mono" title="server-side label selector">-l {filter.labels}</span>
+      {/if}
       {#if s.views.top.kind === "pods"}
         <span class="dim">
           {s.pods.rows.length} pods
@@ -703,8 +746,12 @@
     {#if s.views.top.kind === "pods"}
       <div class="pod-table">
         <div class="pod-row pod-head">
-          <span>NAMESPACE</span><span>NAME</span><span>READY</span><span>STATUS</span>
-          <span>RESTARTS</span><span>IP</span><span>NODE</span><span>AGE</span>
+          {#each POD_COLUMNS as [label, field] (field)}<button
+              type="button"
+              class="col-head"
+              onclick={() => (podSort = cycleSort(podSort, field))}
+              >{label}{sortIndicator(podSort, field)}</button
+            >{/each}
         </div>
         <VirtualList items={podsVisible} itemHeight={28} scrollToIndex={podsSelectedIndex}>
           {#snippet row(pod: PodRow)}
