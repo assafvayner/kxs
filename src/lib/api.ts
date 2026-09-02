@@ -153,6 +153,8 @@ export interface ResourceEvent {
   message: string;
   count: number;
   lastSeen: string | null;
+  firstSeen: string | null;
+  source: string;
 }
 
 export type ExecEvent =

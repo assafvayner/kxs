@@ -392,6 +392,39 @@ pub struct ResourceEvent {
     pub message: String,
     pub count: i32,
     pub last_seen: Option<String>,
+    pub first_seen: Option<String>,
+    /// Reporting component (`kubelet`, `default-scheduler`, ...); empty when unknown.
+    pub source: String,
+}
+
+fn resource_event(e: k8s_openapi::api::core::v1::Event) -> ResourceEvent {
+    let series_count = e.series.as_ref().and_then(|series| series.count);
+    let last_seen = e
+        .series
+        .as_ref()
+        .and_then(|series| series.last_observed_time.as_ref())
+        .map(|t| t.0.to_rfc3339())
+        .or_else(|| e.last_timestamp.as_ref().map(|t| t.0.to_rfc3339()))
+        .or_else(|| e.event_time.as_ref().map(|t| t.0.to_rfc3339()));
+    let first_seen = e
+        .event_time
+        .as_ref()
+        .map(|t| t.0.to_rfc3339())
+        .or_else(|| e.first_timestamp.as_ref().map(|t| t.0.to_rfc3339()));
+
+    ResourceEvent {
+        type_: e.type_.unwrap_or_default(),
+        reason: e.reason.unwrap_or_default(),
+        message: e.message.unwrap_or_default(),
+        count: series_count.or(e.count).unwrap_or(1),
+        last_seen,
+        first_seen,
+        source: e
+            .source
+            .and_then(|s| s.component)
+            .or(e.reporting_component)
+            .unwrap_or_default(),
+    }
 }
 
 /// Events referencing a given object (best-effort; empty on error). Filtering
@@ -419,16 +452,7 @@ pub async fn get_events(
         Ok(l) => l,
         Err(_) => return Vec::new(),
     };
-    list.items
-        .into_iter()
-        .map(|e| ResourceEvent {
-            type_: e.type_.unwrap_or_default(),
-            reason: e.reason.unwrap_or_default(),
-            message: e.message.unwrap_or_default(),
-            count: e.count.unwrap_or(0),
-            last_seen: e.last_timestamp.map(|t| t.0.to_rfc3339()),
-        })
-        .collect()
+    list.items.into_iter().map(resource_event).collect()
 }
 
 /// A kind to probe for existence, supplied by the frontend from discovery.
@@ -515,6 +539,68 @@ mod tests {
     fn empty_namespace_treated_as_all() {
         // caller passes None for all-namespaces; empty &str should not happen, but guard:
         assert_eq!(list_path("", "v1", "pods", None), "/api/v1/pods");
+    }
+
+    #[test]
+    fn resource_event_prefers_modern_series_fields() {
+        let event = serde_json::from_value(serde_json::json!({
+            "metadata": {},
+            "involvedObject": {},
+            "type": "Warning",
+            "reason": "BackOff",
+            "message": "Back-off restarting",
+            "count": 2,
+            "eventTime": "2026-07-03T11:50:00Z",
+            "firstTimestamp": "2026-07-03T11:40:00Z",
+            "lastTimestamp": "2026-07-03T11:55:00Z",
+            "series": {
+                "count": 4,
+                "lastObservedTime": "2026-07-03T11:58:00Z"
+            },
+            "source": { "component": "kubelet" },
+            "reportingComponent": "new-kubelet"
+        }))
+        .unwrap();
+
+        let mapped = resource_event(event);
+        assert_eq!(mapped.type_, "Warning");
+        assert_eq!(mapped.reason, "BackOff");
+        assert_eq!(mapped.message, "Back-off restarting");
+        assert_eq!(mapped.count, 4);
+        assert_eq!(
+            mapped.last_seen.as_deref(),
+            Some("2026-07-03T11:58:00+00:00")
+        );
+        assert_eq!(
+            mapped.first_seen.as_deref(),
+            Some("2026-07-03T11:50:00+00:00")
+        );
+        assert_eq!(mapped.source, "kubelet");
+    }
+
+    #[test]
+    fn resource_event_falls_back_to_legacy_fields() {
+        let event = serde_json::from_value(serde_json::json!({
+            "metadata": {},
+            "involvedObject": {},
+            "count": 2,
+            "firstTimestamp": "2026-07-03T11:40:00Z",
+            "lastTimestamp": "2026-07-03T11:55:00Z",
+            "reportingComponent": "default-scheduler"
+        }))
+        .unwrap();
+
+        let mapped = resource_event(event);
+        assert_eq!(mapped.count, 2);
+        assert_eq!(
+            mapped.last_seen.as_deref(),
+            Some("2026-07-03T11:55:00+00:00")
+        );
+        assert_eq!(
+            mapped.first_seen.as_deref(),
+            Some("2026-07-03T11:40:00+00:00")
+        );
+        assert_eq!(mapped.source, "default-scheduler");
     }
 
     const TABLE_JSON: &str = r#"{
