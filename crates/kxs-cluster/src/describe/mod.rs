@@ -5,6 +5,7 @@
 //! built-in kinds; everything else falls back to `generic`.
 
 pub mod batch;
+pub mod config;
 pub mod events;
 pub mod generic;
 pub mod header;
@@ -18,7 +19,9 @@ use crate::discovery::ResourceKind;
 use crate::resources::{api_resource, get_events, ResourceEvent};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::batch::v1::{CronJob, Job};
-use k8s_openapi::api::core::v1::{Endpoints, LimitRange, Pod, ResourceQuota, Secret, Service};
+use k8s_openapi::api::core::v1::{
+    ConfigMap, Endpoints, LimitRange, Pod, ResourceQuota, Secret, Service,
+};
 use k8s_openapi::api::networking::v1::Ingress;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::chrono::{DateTime, Utc};
@@ -115,6 +118,15 @@ fn write_kind(
         )),
         ("", "Endpoints") => typed!(Endpoints, |o| network::write_endpoints(w, &o)),
         ("networking.k8s.io", "Ingress") => typed!(Ingress, |o| network::write_ingress(w, &o)),
+        ("", "ConfigMap") => typed!(ConfigMap, |o| config::write_configmap(w, &o)),
+        ("", "Secret") => {
+            if let Ok(secret) = serde_json::from_value::<Secret>(value.clone()) {
+                config::write_secret(w, &secret);
+            } else {
+                config::write_secret_unstructured(w, value);
+            }
+            return false;
+        }
         _ => {}
     }
     generic::write(w, value, kind.namespaced);
@@ -231,4 +243,131 @@ async fn gather(
         _ => {}
     }
     l
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn malformed_secret_fails_closed_and_suppresses_events() {
+        let kind = ResourceKind {
+            group: "".into(),
+            version: "v1".into(),
+            kind: "Secret".into(),
+            plural: "secrets".into(),
+            namespaced: true,
+            aliases: vec![],
+        };
+        let value = json!({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": "broken", "namespace": "default"},
+            "type": "Opaque",
+            "immutable": "malformed-optional-secret",
+            "data": {
+                "invalid": "not-base64-secret!",
+                "valid": "c2VjcmV0"
+            },
+            "stringData": {"password": "plaintext-string-secret"}
+        });
+        let events = [ResourceEvent {
+            type_: "Warning".into(),
+            reason: "Leaked".into(),
+            message: "event-secret-marker".into(),
+            count: 1,
+            last_seen: Some("2026-07-03T11:59:00Z".into()),
+            first_seen: None,
+            source: "secret-source".into(),
+        }];
+
+        let output = describe_value(
+            &kind,
+            &value,
+            &Lookups::default(),
+            &events,
+            "2026-07-03T12:00:00Z".parse().unwrap(),
+        );
+
+        assert!(output.contains("Name:         broken\n"));
+        assert!(output.contains("Type:  Opaque\n"));
+        assert!(output.contains("invalid:  0 bytes\n"));
+        assert!(output.contains("valid:  6 bytes\n"));
+        for secret in [
+            "not-base64-secret!",
+            "c2VjcmV0",
+            "secret",
+            "plaintext-string-secret",
+            "malformed-optional-secret",
+        ] {
+            assert!(!output.contains(secret), "output exposed {secret:?}");
+        }
+        assert!(!output.contains("Events"));
+        assert!(!output.contains("event-secret-marker"));
+    }
+
+    #[test]
+    fn malformed_configmap_generic_fallback_escapes_terminal_controls() {
+        let kind = ResourceKind {
+            group: "".into(),
+            version: "v1".into(),
+            kind: "ConfigMap".into(),
+            plural: "configmaps".into(),
+            namespaced: true,
+            aliases: vec![],
+        };
+        let value = json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "broken", "namespace": "default"},
+            "immutable": "malformed-configmap",
+            "data": {"key\u{1b}\r": "value\u{1b}\r"}
+        });
+
+        let output = describe_value(
+            &kind,
+            &value,
+            &Lookups::default(),
+            &[],
+            "2026-07-03T12:00:00Z".parse().unwrap(),
+        );
+
+        assert!(output.contains("API Version:  v1\n"));
+        assert!(output.contains("Key^[\\r:  value^[\\r\n"));
+        assert!(!output.contains('\u{1b}'));
+        assert!(!output.contains('\r'));
+    }
+
+    #[test]
+    fn typed_secret_escapes_custom_type_and_data_key() {
+        let kind = ResourceKind {
+            group: "".into(),
+            version: "v1".into(),
+            kind: "Secret".into(),
+            plural: "secrets".into(),
+            namespaced: true,
+            aliases: vec![],
+        };
+        let value = json!({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": "safe", "namespace": "default"},
+            "type": "custom\u{1b}\r",
+            "data": {"key\u{1b}\r": "c2VjcmV0"}
+        });
+
+        let output = describe_value(
+            &kind,
+            &value,
+            &Lookups::default(),
+            &[],
+            "2026-07-03T12:00:00Z".parse().unwrap(),
+        );
+
+        assert!(output.contains("Type:  custom^[\\r\n"));
+        assert!(output.contains("key^[\\r:  6 bytes\n"));
+        assert!(!output.contains('\u{1b}'));
+        assert!(!output.contains('\r'));
+    }
 }

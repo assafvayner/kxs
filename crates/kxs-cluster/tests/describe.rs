@@ -198,3 +198,21 @@ fn ingress() {
         &Lookups::default(),
     );
 }
+
+#[test]
+fn configmap() {
+    golden(
+        "configmap",
+        &kind("", "v1", "ConfigMap", "configmaps", true),
+        &Lookups::default(),
+    );
+}
+
+#[test]
+fn secret() {
+    golden(
+        "secret",
+        &kind("", "v1", "Secret", "secrets", true),
+        &Lookups::default(),
+    );
+}

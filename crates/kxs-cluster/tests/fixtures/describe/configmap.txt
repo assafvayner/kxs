@@ -1,0 +1,22 @@
+Name:  cfg
+Namespace:  default
+Labels:  <none>
+Annotations:  <none>
+
+Data
+====
+config.yaml:
+----
+a: 1
+b: 2
+
+mode:
+----
+prod
+
+
+BinaryData
+====
+blob: 3 bytes
+
+Events:  <none>

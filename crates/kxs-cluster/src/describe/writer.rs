@@ -5,7 +5,13 @@
 /// with a single cell are emitted verbatim and end the block.
 #[derive(Debug, Default)]
 pub struct Writer {
-    lines: Vec<Vec<String>>,
+    lines: Vec<Line>,
+}
+
+#[derive(Debug)]
+struct Line {
+    cells: Vec<String>,
+    trim_end: bool,
 }
 
 const PAD: usize = 2;
@@ -21,19 +27,21 @@ impl Writer {
 
     /// `Key:` then `value` in the next cell.
     pub fn kv(&mut self, level: usize, key: &str, value: impl std::fmt::Display) {
-        self.lines
-            .push(vec![format!("{}{key}:", indent(level)), value.to_string()]);
+        self.push(
+            vec![format!("{}{key}:", indent(level)), value.to_string()],
+            true,
+        );
     }
 
     /// `Key:` with no inline value; children follow at `level + 1`.
     pub fn section(&mut self, level: usize, key: &str) {
-        self.lines.push(vec![format!("{}{key}:", indent(level))]);
+        self.push(vec![format!("{}{key}:", indent(level))], true);
     }
 
     /// Continuation of the previous value: an empty first cell so the value
     /// aligns under the one above (second label, second toleration...).
     pub fn cont(&mut self, level: usize, value: &str) {
-        self.lines.push(vec![indent(level), value.to_string()]);
+        self.push(vec![indent(level), value.to_string()], true);
     }
 
     /// Arbitrary cells (table header and rows).
@@ -46,52 +54,77 @@ impl Writer {
         if let Some(first) = v.first_mut() {
             *first = format!("{}{first}", indent(level));
         }
-        self.lines.push(v);
+        self.push(v, true);
     }
 
     /// A single-cell line, emitted verbatim.
     pub fn text(&mut self, level: usize, text: &str) {
-        self.lines.push(vec![format!("{}{text}", indent(level))]);
+        self.push(vec![format!("{}{text}", indent(level))], true);
+    }
+
+    /// A single-cell line whose trailing whitespace is content, not padding.
+    pub fn preserved_text(&mut self, level: usize, text: &str) {
+        self.push(vec![format!("{}{text}", indent(level))], false);
+    }
+
+    fn push(&mut self, cells: Vec<String>, trim_end: bool) {
+        self.lines.push(Line { cells, trim_end });
     }
 
     pub fn finish(self) -> String {
         let mut out = String::new();
-        let lines = self.lines;
+        let mut lines = self.lines;
+        for line in &mut lines {
+            for cell in &mut line.cells {
+                *cell = escape_terminal(cell);
+            }
+        }
         let mut i = 0;
         while i < lines.len() {
-            if lines[i].len() < 2 {
-                out.push_str(lines[i][0].trim_end());
+            if lines[i].cells.len() < 2 {
+                let text = &lines[i].cells[0];
+                out.push_str(if lines[i].trim_end {
+                    text.trim_end()
+                } else {
+                    text
+                });
                 out.push('\n');
                 i += 1;
                 continue;
             }
             let mut j = i;
-            while j < lines.len() && lines[j].len() >= 2 {
+            while j < lines.len() && lines[j].cells.len() >= 2 {
                 j += 1;
             }
             let block = &lines[i..j];
-            let ncols = block.iter().map(Vec::len).max().unwrap_or(0);
+            let ncols = block.iter().map(|line| line.cells.len()).max().unwrap_or(0);
             let mut widths = vec![0usize; ncols];
             for line in block {
-                for (c, cell) in line.iter().enumerate().take(line.len() - 1) {
+                for (c, cell) in line.cells.iter().enumerate().take(line.cells.len() - 1) {
                     widths[c] = widths[c].max(cell.chars().count() + PAD);
                 }
             }
             for line in block {
                 let mut s = String::new();
-                for (c, cell) in line.iter().enumerate() {
+                for (c, cell) in line.cells.iter().enumerate() {
                     s.push_str(cell);
-                    if c + 1 < line.len() {
+                    if c + 1 < line.cells.len() {
                         s.push_str(&" ".repeat(widths[c] - cell.chars().count()));
                     }
                 }
-                out.push_str(s.trim_end());
+                out.push_str(if line.trim_end { s.trim_end() } else { &s });
                 out.push('\n');
             }
             i = j;
         }
         out
     }
+}
+
+/// Mirrors kubectl's `WriteEscaped`: terminal controls are made visible while
+/// line feeds remain structural output.
+fn escape_terminal(value: &str) -> String {
+    value.replace('\u{1b}', "^[").replace('\r', "\\r")
 }
 
 #[cfg(test)]
@@ -172,5 +205,20 @@ mod tests {
         let mut w = Writer::new();
         w.cells(2, &[]);
         assert_eq!(w.finish(), "\n");
+    }
+
+    #[test]
+    fn preserved_text_keeps_trailing_and_whitespace_only_lines() {
+        let mut w = Writer::new();
+        w.preserved_text(0, "first\u{1b}  \r\n   \nlast \r ");
+        assert_eq!(w.finish(), "first^[  \\r\n   \nlast \\r \n");
+    }
+
+    #[test]
+    fn terminal_controls_are_escaped_before_alignment() {
+        let mut w = Writer::new();
+        w.kv(0, "abc\u{1b}", "first\r");
+        w.kv(0, "long", "second\u{1b}");
+        assert_eq!(w.finish(), "abc^[:  first\\r\nlong:   second^[\n");
     }
 }
