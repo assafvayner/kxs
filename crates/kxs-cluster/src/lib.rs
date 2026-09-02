@@ -1,4 +1,5 @@
 pub mod bridge;
+pub mod describe;
 pub mod discovery;
 pub mod edit;
 pub mod exec;
