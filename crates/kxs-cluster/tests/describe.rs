@@ -6,7 +6,13 @@
 //! leading whitespace kept, internal runs of 2+ spaces collapsed to two.
 //! Run with `UPDATE_GOLDENS=1` to rewrite the `.txt` files from actual output.
 
-use k8s_openapi::api::core::v1::{EndpointAddress, EndpointPort, EndpointSubset, Endpoints};
+use k8s_openapi::api::coordination::v1::{Lease, LeaseSpec};
+use k8s_openapi::api::core::v1::{
+    Container, EndpointAddress, EndpointPort, EndpointSubset, Endpoints, Pod, PodSpec,
+    ResourceRequirements,
+};
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{MicroTime, ObjectMeta, Time};
 use k8s_openapi::chrono::{DateTime, Utc};
 use kxs_cluster::describe::{describe_value, Lookups};
 use kxs_cluster::discovery::ResourceKind;
@@ -73,6 +79,13 @@ fn golden(name: &str, kind: &ResourceKind, lookups: &Lookups) {
         actual, expected,
         "golden mismatch for {name} (UPDATE_GOLDENS=1 to accept)"
     );
+}
+
+fn quantities(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, Quantity> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), Quantity(v.to_string())))
+        .collect()
 }
 
 #[test]
@@ -215,4 +228,44 @@ fn secret() {
         &kind("", "v1", "Secret", "secrets", true),
         &Lookups::default(),
     );
+}
+
+#[test]
+fn node_with_pods() {
+    let pod = Pod {
+        metadata: ObjectMeta {
+            name: Some("web-1".into()),
+            namespace: Some("default".into()),
+            creation_timestamp: Some(Time("2026-07-01T00:00:00Z".parse().unwrap())),
+            ..Default::default()
+        },
+        spec: Some(PodSpec {
+            containers: vec![Container {
+                name: "web".into(),
+                resources: Some(ResourceRequirements {
+                    requests: Some(quantities(&[("cpu", "100m"), ("memory", "64Mi")])),
+                    limits: Some(quantities(&[("cpu", "500m"), ("memory", "128Mi")])),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let lease = Lease {
+        spec: Some(LeaseSpec {
+            holder_identity: Some("node-a".into()),
+            acquire_time: Some(MicroTime("2026-07-01T00:00:00Z".parse().unwrap())),
+            renew_time: Some(MicroTime("2026-07-03T11:59:00Z".parse().unwrap())),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let lookups = Lookups {
+        lease: Some(lease),
+        pods: vec![pod],
+        ..Default::default()
+    };
+    golden("node", &kind("", "v1", "Node", "nodes", false), &lookups);
 }

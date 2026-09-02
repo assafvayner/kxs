@@ -1,0 +1,17 @@
+{
+  "apiVersion": "v1", "kind": "Node",
+  "metadata": {"name": "node-a", "uid": "n1", "creationTimestamp": "2026-07-01T00:00:00Z",
+    "labels": {"kubernetes.io/hostname": "node-a", "node-role.kubernetes.io/control-plane": ""}},
+  "spec": {"podCIDR": "10.244.0.0/24", "podCIDRs": ["10.244.0.0/24"],
+    "taints": [{"key": "node-role.kubernetes.io/control-plane", "effect": "NoSchedule"}]},
+  "status": {
+    "addresses": [{"type": "InternalIP", "address": "10.0.0.1"}, {"type": "Hostname", "address": "node-a"}],
+    "capacity": {"cpu": "4", "memory": "16Gi", "pods": "110"},
+    "allocatable": {"cpu": "4", "memory": "15Gi", "pods": "110"},
+    "conditions": [{"type": "Ready", "status": "True", "lastHeartbeatTime": "2026-07-03T11:59:00Z",
+      "lastTransitionTime": "2026-07-01T00:00:00Z", "reason": "KubeletReady", "message": "kubelet is posting ready status"}],
+    "nodeInfo": {"machineID": "m", "systemUUID": "u", "bootID": "b", "kernelVersion": "6.1", "osImage": "Ubuntu 22.04",
+      "operatingSystem": "linux", "architecture": "amd64", "containerRuntimeVersion": "containerd://1.7",
+      "kubeletVersion": "v1.31.2", "kubeProxyVersion": "v1.31.2"}
+  }
+}

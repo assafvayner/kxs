@@ -1,0 +1,52 @@
+Name:  node-a
+Roles:  control-plane
+Labels:  kubernetes.io/hostname=node-a
+                    node-role.kubernetes.io/control-plane=
+Annotations:  <none>
+CreationTimestamp:  Wed, 01 Jul 2026 00:00:00 +0000
+Taints:  node-role.kubernetes.io/control-plane:NoSchedule
+Unschedulable:  false
+Lease:
+  HolderIdentity:  node-a
+  AcquireTime:  Wed, 01 Jul 2026 00:00:00 +0000
+  RenewTime:  Fri, 03 Jul 2026 11:59:00 +0000
+Conditions:
+  Type  Status  LastHeartbeatTime  LastTransitionTime  Reason  Message
+  ----  ------  -----------------  ------------------  ------  -------
+  Ready  True  Fri, 03 Jul 2026 11:59:00 +0000  Wed, 01 Jul 2026 00:00:00 +0000  KubeletReady  kubelet is posting ready status
+Addresses:
+  InternalIP:  10.0.0.1
+  Hostname:  node-a
+Capacity:
+  cpu:  4
+  memory:  16Gi
+  pods:  110
+Allocatable:
+  cpu:  4
+  memory:  15Gi
+  pods:  110
+System Info:
+  Machine ID:  m
+  System UUID:  u
+  Boot ID:  b
+  Kernel Version:  6.1
+  OS Image:  Ubuntu 22.04
+  Operating System:  linux
+  Architecture:  amd64
+  Container Runtime Version:  containerd://1.7
+  Kubelet Version:  v1.31.2
+  Kube-Proxy Version:  v1.31.2
+PodCIDR:  10.244.0.0/24
+PodCIDRs:  10.244.0.0/24
+Non-terminated Pods:  (1 in total)
+  Namespace  Name  CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
+  ---------  ----  ------------  ----------  ---------------  -------------  ---
+  default  web-1  100m (2%)  500m (12%)  64Mi (0%)  128Mi (0%)  2d12h
+Allocated resources:
+  (Total limits may be over 100 percent, i.e., overcommitted.)
+  Resource  Requests  Limits
+  --------  --------  ------
+  cpu  100m (2%)  500m (12%)
+  memory  64Mi (0%)  128Mi (0%)
+  ephemeral-storage  0 (0%)  0 (0%)
+Events:  <none>

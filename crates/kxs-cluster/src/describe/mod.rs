@@ -10,6 +10,7 @@ pub mod events;
 pub mod generic;
 pub mod header;
 pub mod network;
+pub mod node;
 pub mod pod;
 pub mod util;
 pub mod workloads;
@@ -19,8 +20,9 @@ use crate::discovery::ResourceKind;
 use crate::resources::{api_resource, get_events, ResourceEvent};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::batch::v1::{CronJob, Job};
+use k8s_openapi::api::coordination::v1::Lease;
 use k8s_openapi::api::core::v1::{
-    ConfigMap, Endpoints, LimitRange, Pod, ResourceQuota, Secret, Service,
+    ConfigMap, Endpoints, LimitRange, Node, Pod, ResourceQuota, Secret, Service,
 };
 use k8s_openapi::api::networking::v1::Ingress;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
@@ -36,6 +38,8 @@ use writer::Writer;
 pub struct Lookups {
     /// Service: its Endpoints object.
     pub endpoints: Option<Endpoints>,
+    /// Node: its heartbeat lease from `kube-node-lease`.
+    pub lease: Option<Lease>,
     /// Node: pods scheduled on it. ReplicaSet/StatefulSet/DaemonSet: pods matching the selector.
     /// PersistentVolumeClaim: pods in the namespace (filtered by claim name when printing).
     pub pods: Vec<Pod>,
@@ -74,7 +78,6 @@ fn write_kind(
     now: DateTime<Utc>,
 ) -> bool {
     let now_ms = now.timestamp_millis();
-    let _ = now_ms;
     macro_rules! typed {
         ($t:ty, |$o:ident| $body:expr) => {
             typed!($t, |$o| $body, true)
@@ -127,6 +130,13 @@ fn write_kind(
             }
             return false;
         }
+        ("", "Node") => typed!(Node, |o| node::write(
+            w,
+            &o,
+            lookups.lease.as_ref(),
+            &lookups.pods,
+            now_ms
+        )),
         _ => {}
     }
     generic::write(w, value, kind.namespaced);
@@ -165,6 +175,10 @@ where
     api.list(&lp).await.map(|l| l.items).unwrap_or_default()
 }
 
+fn best_effort_get<T, E>(result: Result<Option<T>, E>) -> Option<T> {
+    result.ok().flatten()
+}
+
 fn selector_of(value: &Value) -> Option<String> {
     let sel: LabelSelector =
         serde_json::from_value(value.get("spec")?.get("selector")?.clone()).ok()?;
@@ -190,6 +204,11 @@ async fn gather(
                 .flatten();
         }
         ("", "Node") => {
+            l.lease = best_effort_get(
+                Api::<Lease>::namespaced(client.clone(), "kube-node-lease")
+                    .get_opt(name)
+                    .await,
+            );
             l.pods = list_or_empty(
                 Api::<Pod>::all(client.clone()),
                 ListParams::default().fields(&format!("spec.nodeName={name}")),
@@ -249,6 +268,12 @@ async fn gather(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn best_effort_get_treats_missing_and_failed_lookups_as_absent() {
+        assert_eq!(best_effort_get::<Lease, &str>(Ok(None)), None);
+        assert_eq!(best_effort_get::<Lease, &str>(Err("forbidden")), None);
+    }
 
     #[test]
     fn malformed_secret_fails_closed_and_suppresses_events() {
