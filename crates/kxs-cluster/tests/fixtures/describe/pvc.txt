@@ -1,0 +1,13 @@
+Name:  data-db-0
+Namespace:  default
+StorageClass:  gp3
+Status:  Bound
+Volume:  pvc-abc
+Labels:  app=db
+Annotations:  <none>
+Finalizers:  [kubernetes.io/pvc-protection]
+Capacity:  10Gi
+Access Modes:  RWO
+VolumeMode:  Filesystem
+Used By:  db-0
+Events:  <none>

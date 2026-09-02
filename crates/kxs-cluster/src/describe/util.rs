@@ -90,26 +90,25 @@ pub fn selector_string(s: &LabelSelector) -> String {
     }
 }
 
-/// `ReadWriteOnce` → `RWO` etc., joined by commas; `<none>` when empty.
+/// Known access modes in kubectl's canonical `RWO,ROX,RWX,RWOP` order.
+/// Duplicates and unknown modes are ignored; empty input produces an empty string.
 pub fn access_modes_short(modes: Option<&Vec<String>>) -> String {
-    let short: Vec<&str> = modes
-        .map(|m| {
-            m.iter()
-                .map(|s| match s.as_str() {
-                    "ReadWriteOnce" => "RWO",
-                    "ReadOnlyMany" => "ROX",
-                    "ReadWriteMany" => "RWX",
-                    "ReadWriteOncePod" => "RWOP",
-                    other => other,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    if short.is_empty() {
-        NONE.to_string()
-    } else {
-        short.join(",")
-    }
+    let modes = modes.map(Vec::as_slice).unwrap_or_default();
+    [
+        ("ReadWriteOnce", "RWO"),
+        ("ReadOnlyMany", "ROX"),
+        ("ReadWriteMany", "RWX"),
+        ("ReadWriteOncePod", "RWOP"),
+    ]
+    .into_iter()
+    .filter_map(|(mode, short)| {
+        modes
+            .iter()
+            .any(|candidate| candidate == mode)
+            .then_some(short)
+    })
+    .collect::<Vec<_>>()
+    .join(",")
 }
 
 const ACRONYMS: &[&str] = &[
@@ -207,9 +206,18 @@ mod tests {
 
     #[test]
     fn access_modes_are_abbreviated() {
-        let modes = vec!["ReadWriteOnce".to_string(), "ReadOnlyMany".to_string()];
-        assert_eq!(access_modes_short(Some(&modes)), "RWO,ROX");
-        assert_eq!(access_modes_short(None), "<none>");
+        let modes = vec![
+            "ReadWriteOncePod".to_string(),
+            "ReadWriteMany".to_string(),
+            "ReadWriteOnce".to_string(),
+            "ReadOnlyMany".to_string(),
+            "ReadWriteOnce".to_string(),
+            "FutureMode".to_string(),
+        ];
+        assert_eq!(access_modes_short(Some(&modes)), "RWO,ROX,RWX,RWOP");
+        assert_eq!(access_modes_short(Some(&vec![])), "");
+        assert_eq!(access_modes_short(Some(&vec!["FutureMode".into()])), "");
+        assert_eq!(access_modes_short(None), "");
     }
 
     #[test]

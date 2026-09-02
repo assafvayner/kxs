@@ -1,0 +1,8 @@
+{
+  "apiVersion": "v1", "kind": "PersistentVolumeClaim",
+  "metadata": {"name": "data-db-0", "namespace": "default", "finalizers": ["kubernetes.io/pvc-protection"],
+    "labels": {"app": "db"}},
+  "spec": {"storageClassName": "gp3", "accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem",
+    "volumeName": "pvc-abc", "resources": {"requests": {"storage": "10Gi"}}},
+  "status": {"phase": "Bound", "accessModes": ["ReadWriteOnce"], "capacity": {"storage": "10Gi"}}
+}

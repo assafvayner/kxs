@@ -9,9 +9,11 @@ pub mod config;
 pub mod events;
 pub mod generic;
 pub mod header;
+pub mod namespace;
 pub mod network;
 pub mod node;
 pub mod pod;
+pub mod storage;
 pub mod util;
 pub mod workloads;
 pub mod writer;
@@ -22,7 +24,8 @@ use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet}
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::coordination::v1::Lease;
 use k8s_openapi::api::core::v1::{
-    ConfigMap, Endpoints, LimitRange, Node, Pod, ResourceQuota, Secret, Service,
+    ConfigMap, Endpoints, LimitRange, Namespace, Node, PersistentVolume, PersistentVolumeClaim,
+    Pod, ResourceQuota, Secret, Service,
 };
 use k8s_openapi::api::networking::v1::Ingress;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
@@ -137,6 +140,17 @@ fn write_kind(
             &lookups.pods,
             now_ms
         )),
+        ("", "Namespace") => typed!(
+            Namespace,
+            |o| namespace::write(w, &o, &lookups.quotas, &lookups.limit_ranges),
+            false
+        ),
+        ("", "PersistentVolumeClaim") => typed!(PersistentVolumeClaim, |o| {
+            storage::write_pvc(w, &o, &lookups.pods, now_ms)
+        }),
+        ("", "PersistentVolume") => {
+            typed!(PersistentVolume, |o| { storage::write_pv(w, &o, now_ms) })
+        }
         _ => {}
     }
     generic::write(w, value, kind.namespaced);

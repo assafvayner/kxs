@@ -8,8 +8,8 @@
 
 use k8s_openapi::api::coordination::v1::{Lease, LeaseSpec};
 use k8s_openapi::api::core::v1::{
-    Container, EndpointAddress, EndpointPort, EndpointSubset, Endpoints, Pod, PodSpec,
-    ResourceRequirements,
+    Container, EndpointAddress, EndpointPort, EndpointSubset, Endpoints,
+    PersistentVolumeClaimVolumeSource, Pod, PodSpec, ResourceRequirements, Volume,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{MicroTime, ObjectMeta, Time};
@@ -268,4 +268,60 @@ fn node_with_pods() {
         ..Default::default()
     };
     golden("node", &kind("", "v1", "Node", "nodes", false), &lookups);
+}
+
+#[test]
+fn namespace() {
+    golden(
+        "namespace",
+        &kind("", "v1", "Namespace", "namespaces", false),
+        &Lookups::default(),
+    );
+}
+
+#[test]
+fn pvc_with_user() {
+    let pod = Pod {
+        metadata: ObjectMeta {
+            name: Some("db-0".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
+        spec: Some(PodSpec {
+            volumes: Some(vec![Volume {
+                name: "data".into(),
+                persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                    claim_name: "data-db-0".into(),
+                    read_only: None,
+                }),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let lookups = Lookups {
+        pods: vec![pod],
+        ..Default::default()
+    };
+    golden(
+        "pvc",
+        &kind(
+            "",
+            "v1",
+            "PersistentVolumeClaim",
+            "persistentvolumeclaims",
+            true,
+        ),
+        &lookups,
+    );
+}
+
+#[test]
+fn pv() {
+    golden(
+        "pv",
+        &kind("", "v1", "PersistentVolume", "persistentvolumes", false),
+        &Lookups::default(),
+    );
 }

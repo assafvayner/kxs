@@ -1,0 +1,8 @@
+Name:  default
+Labels:  kubernetes.io/metadata.name=default
+Annotations:  <none>
+Status:  Active
+
+No resource quota.
+
+No LimitRange resource.
