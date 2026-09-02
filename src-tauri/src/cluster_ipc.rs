@@ -406,6 +406,32 @@ pub async fn get_resource_events(
     .await)
 }
 
+/// kubectl-style describe text for one object.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn describe_resource(
+    tab_id: u32,
+    group: String,
+    version: String,
+    kind: String,
+    plural: String,
+    namespaced: bool,
+    namespace: Option<String>,
+    name: String,
+    sessions: State<'_, Sessions>,
+) -> Result<String, String> {
+    let session = session_of(&sessions, tab_id).await?;
+    let rk = kxs_cluster::discovery::ResourceKind {
+        group,
+        version,
+        kind,
+        plural,
+        namespaced,
+        aliases: Vec::new(),
+    };
+    kxs_cluster::describe::describe(session.client.clone(), &rk, namespace.as_deref(), &name).await
+}
+
 /// Applies `yaml` as a merge patch of its diff against `base_yaml`, the
 /// document the editor was opened with. Returns the fresh server YAML, or
 /// `None` when nothing was written (dry run, or an edit that changed nothing).

@@ -303,6 +303,17 @@ export const api = {
     invoke<string | null>("get_openapi_schema", { tabId, group, version }),
   getResourceEvents: (tabId: number, namespace: string | null, kind: string, name: string) =>
     invoke<ResourceEvent[]>("get_resource_events", { tabId, namespace, kind, name }),
+  describeResource: (tabId: number, k: ResourceKind, namespace: string | null, name: string) =>
+    invoke<string>("describe_resource", {
+      tabId,
+      group: k.group,
+      version: k.version,
+      kind: k.kind,
+      plural: k.plural,
+      namespaced: k.namespaced,
+      namespace,
+      name,
+    }),
   /// Applies the diff of `yaml` against `baseYaml` (the document the editor was
   /// opened with). Resolves to the fresh server YAML, or null when nothing was
   /// written (dry run, or an edit that changed nothing).
