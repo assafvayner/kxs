@@ -1,0 +1,21 @@
+{
+  "apiVersion": "example.com/v1",
+  "kind": "Widget",
+  "metadata": {
+    "name": "w1",
+    "namespace": "default",
+    "uid": "abc",
+    "creationTimestamp": "2026-07-01T00:00:00Z",
+    "generation": 2,
+    "resourceVersion": "100",
+    "labels": {"team": "infra"},
+    "managedFields": [{"manager": "kubectl"}]
+  },
+  "spec": {
+    "replicas": 3,
+    "podCIDR": "10.0.0.0/24",
+    "ports": [{"name": "http", "port": 80}],
+    "tags": ["a", "b"]
+  },
+  "status": {"ready": true, "conditions": []}
+}

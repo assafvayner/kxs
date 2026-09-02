@@ -1,0 +1,24 @@
+Name:  w1
+Namespace:  default
+Labels:  team=infra
+Annotations:  <none>
+API Version:  example.com/v1
+Kind:  Widget
+Metadata:
+  Creation Timestamp:  2026-07-01T00:00:00Z
+  Generation:  2
+  Resource Version:  100
+  UID:  abc
+Spec:
+  Pod CIDR:  10.0.0.0/24
+  Ports:
+    Name:  http
+    Port:  80
+  Replicas:  3
+  Tags:
+    a
+    b
+Status:
+  Conditions:
+  Ready:  true
+Events:  <none>
