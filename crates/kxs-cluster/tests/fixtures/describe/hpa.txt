@@ -1,0 +1,22 @@
+Name:  web
+Namespace:  default
+Labels:  <none>
+Annotations:  <none>
+CreationTimestamp:  Wed, 01 Jul 2026 00:00:00 +0000
+Reference:  Deployment/web
+Metrics:  ( current / target )
+  resource cpu on pods  (as a percentage of request):  40% (200m) / 70%
+Min replicas:  2
+Max replicas:  10
+Behavior:
+  Scale Down:
+    Stabilization Window: 300 seconds
+    Select Policy: Max
+    Policies:
+      - Type: Percent  Value: 100  Period: 15 seconds
+Deployment pods:  3 current / 3 desired
+Conditions:
+  Type  Status  Reason  Message
+  ----  ------  ------  -------
+  AbleToScale  True  ReadyForNewScale  recommended size matches current size
+Events:  <none>

@@ -9,10 +9,12 @@ pub mod config;
 pub mod events;
 pub mod generic;
 pub mod header;
+pub mod hpa;
 pub mod namespace;
 pub mod network;
 pub mod node;
 pub mod pod;
+pub mod serviceaccount;
 pub mod storage;
 pub mod util;
 pub mod workloads;
@@ -21,22 +23,30 @@ pub mod writer;
 use crate::discovery::ResourceKind;
 use crate::resources::{api_resource, get_events, ResourceEvent};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
+use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::coordination::v1::Lease;
 use k8s_openapi::api::core::v1::{
     ConfigMap, Endpoints, LimitRange, Namespace, Node, PersistentVolume, PersistentVolumeClaim,
-    Pod, ResourceQuota, Secret, Service,
+    Pod, ResourceQuota, Secret, Service, ServiceAccount,
 };
 use k8s_openapi::api::networking::v1::Ingress;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use k8s_openapi::chrono::{DateTime, Utc};
 use kube::api::{Api, DynamicObject, ListParams};
 use kube::Client;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use writer::Writer;
 
-/// Related objects some describers print (all best-effort, empty on error).
+#[derive(Debug, Default)]
+pub struct ServiceAccountSecretLookup {
+    pub existing_names: BTreeSet<String>,
+    pub token_metadata: Vec<ObjectMeta>,
+}
+
+/// Related objects some describers print (all best-effort, empty or unavailable on error).
 #[derive(Debug, Default)]
 pub struct Lookups {
     /// Service: its Endpoints object.
@@ -51,8 +61,8 @@ pub struct Lookups {
     /// Namespace: quotas and limit ranges in it.
     pub quotas: Vec<ResourceQuota>,
     pub limit_ranges: Vec<LimitRange>,
-    /// ServiceAccount: token secrets in the namespace.
-    pub secrets: Vec<Secret>,
+    /// ServiceAccount: metadata-only Secret lookup. `None` means the lookup failed.
+    pub service_account_secrets: Option<ServiceAccountSecretLookup>,
 }
 
 /// Pure formatter: object JSON + lookups + events → describe text.
@@ -150,6 +160,14 @@ fn write_kind(
         }),
         ("", "PersistentVolume") => {
             typed!(PersistentVolume, |o| { storage::write_pv(w, &o, now_ms) })
+        }
+        ("", "ServiceAccount") => typed!(ServiceAccount, |o| serviceaccount::write(
+            w,
+            &o,
+            lookups.service_account_secrets.as_ref()
+        )),
+        ("autoscaling", "HorizontalPodAutoscaler") => {
+            typed!(HorizontalPodAutoscaler, |o| hpa::write(w, &o))
         }
         _ => {}
     }
@@ -249,11 +267,8 @@ async fn gather(
             .await;
         }
         ("", "ServiceAccount") => {
-            l.secrets = list_or_empty(
-                Api::<Secret>::namespaced(client.clone(), ns),
-                ListParams::default().fields("type=kubernetes.io/service-account-token"),
-            )
-            .await;
+            l.service_account_secrets =
+                service_account_secret_lookup(Api::<Secret>::namespaced(client.clone(), ns)).await;
         }
         ("apps", "Deployment") => {
             if let Some(sel) = selector_of(value) {
@@ -276,6 +291,26 @@ async fn gather(
         _ => {}
     }
     l
+}
+
+async fn service_account_secret_lookup(api: Api<Secret>) -> Option<ServiceAccountSecretLookup> {
+    let all = api.list_metadata(&ListParams::default()).await.ok()?;
+    let tokens = api
+        .list_metadata(&ListParams::default().fields("type=kubernetes.io/service-account-token"))
+        .await
+        .ok()?;
+    Some(ServiceAccountSecretLookup {
+        existing_names: all
+            .items
+            .into_iter()
+            .filter_map(|secret| secret.metadata.name)
+            .collect(),
+        token_metadata: tokens
+            .items
+            .into_iter()
+            .map(|secret| secret.metadata)
+            .collect(),
+    })
 }
 
 #[cfg(test)]

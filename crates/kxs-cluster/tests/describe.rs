@@ -14,7 +14,7 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{MicroTime, ObjectMeta, Time};
 use k8s_openapi::chrono::{DateTime, Utc};
-use kxs_cluster::describe::{describe_value, Lookups};
+use kxs_cluster::describe::{describe_value, Lookups, ServiceAccountSecretLookup};
 use kxs_cluster::discovery::ResourceKind;
 use serde_json::Value;
 use std::fs;
@@ -322,6 +322,58 @@ fn pv() {
     golden(
         "pv",
         &kind("", "v1", "PersistentVolume", "persistentvolumes", false),
+        &Lookups::default(),
+    );
+}
+
+#[test]
+fn serviceaccount_with_token() {
+    let token_metadata = ObjectMeta {
+        name: Some("builder-token-abc".into()),
+        namespace: Some("default".into()),
+        annotations: Some(
+            [
+                (
+                    "kubernetes.io/service-account.name".to_string(),
+                    "builder".to_string(),
+                ),
+                (
+                    "kubernetes.io/service-account.uid".to_string(),
+                    "builder-uid".to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..Default::default()
+    };
+    let lookups = Lookups {
+        service_account_secrets: Some(ServiceAccountSecretLookup {
+            existing_names: ["regcred".into(), "builder-token-abc".into()]
+                .into_iter()
+                .collect(),
+            token_metadata: vec![token_metadata],
+        }),
+        ..Default::default()
+    };
+    golden(
+        "serviceaccount",
+        &kind("", "v1", "ServiceAccount", "serviceaccounts", true),
+        &lookups,
+    );
+}
+
+#[test]
+fn hpa() {
+    golden(
+        "hpa",
+        &kind(
+            "autoscaling",
+            "v2",
+            "HorizontalPodAutoscaler",
+            "horizontalpodautoscalers",
+            true,
+        ),
         &Lookups::default(),
     );
 }
