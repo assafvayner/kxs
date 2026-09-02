@@ -1,0 +1,10 @@
+{
+  "apiVersion": "batch/v1", "kind": "Job",
+  "metadata": {"name": "backup-29123", "namespace": "default", "labels": {"job-name": "backup-29123"},
+    "ownerReferences": [{"apiVersion": "batch/v1", "kind": "CronJob", "name": "backup", "uid": "cj1", "controller": true}]},
+  "spec": {"parallelism": 1, "completions": 1, "completionMode": "NonIndexed",
+    "selector": {"matchLabels": {"batch.kubernetes.io/controller-uid": "j1"}},
+    "template": {"metadata": {"labels": {"job-name": "backup-29123"}},
+      "spec": {"restartPolicy": "Never", "containers": [{"name": "backup", "image": "backup:1", "command": ["/bin/backup", "--full"]}]}}},
+  "status": {"startTime": "2026-07-01T00:00:00Z", "completionTime": "2026-07-01T00:01:00Z", "succeeded": 1}
+}

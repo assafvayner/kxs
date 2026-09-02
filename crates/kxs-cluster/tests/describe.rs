@@ -127,3 +127,21 @@ fn daemonset() {
         &Lookups::default(),
     );
 }
+
+#[test]
+fn job() {
+    golden(
+        "job",
+        &kind("batch", "v1", "Job", "jobs", true),
+        &Lookups::default(),
+    );
+}
+
+#[test]
+fn cronjob() {
+    golden(
+        "cronjob",
+        &kind("batch", "v1", "CronJob", "cronjobs", true),
+        &Lookups::default(),
+    );
+}

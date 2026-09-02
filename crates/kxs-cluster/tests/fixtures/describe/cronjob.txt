@@ -1,0 +1,29 @@
+Name:  backup
+Namespace:  default
+Labels:  <none>
+Annotations:  <none>
+Schedule:  0 2 * * *
+Concurrency Policy:  Forbid
+Suspend:  False
+Time Zone:  <unset>
+Successful Job History Limit:  3
+Failed Job History Limit:  1
+Starting Deadline Seconds:  <unset>
+Selector:  <unset>
+Parallelism:  <unset>
+Completions:  <unset>
+Pod Template:
+  Labels:  <none>
+  Containers:
+    backup:
+      Image:  backup:1
+      Port:  <none>
+      Host Port:  <none>
+      Environment:  <none>
+      Mounts:  <none>
+  Volumes:  <none>
+  Node-Selectors:  <none>
+  Tolerations:  <none>
+Last Schedule Time:  Thu, 02 Jul 2026 02:00:00 +0000
+Active Jobs:  backup-29123
+Events:  <none>

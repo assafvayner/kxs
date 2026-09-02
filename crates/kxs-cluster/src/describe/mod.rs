@@ -4,6 +4,7 @@
 //! `describe_value` (pure) formats them. Typed describers handle the common
 //! built-in kinds; everything else falls back to `generic`.
 
+pub mod batch;
 pub mod events;
 pub mod generic;
 pub mod header;
@@ -15,6 +16,7 @@ pub mod writer;
 use crate::discovery::ResourceKind;
 use crate::resources::{api_resource, get_events, ResourceEvent};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
+use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{Endpoints, LimitRange, Pod, ResourceQuota, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::chrono::{DateTime, Utc};
@@ -102,6 +104,8 @@ fn write_kind(
             &o,
             &lookups.pods
         )),
+        ("batch", "Job") => typed!(Job, |o| batch::write_job(w, &o)),
+        ("batch", "CronJob") => typed!(CronJob, |o| batch::write_cronjob(w, &o)),
         _ => {}
     }
     generic::write(w, value, kind.namespaced);

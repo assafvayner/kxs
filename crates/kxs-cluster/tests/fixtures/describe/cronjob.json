@@ -1,0 +1,10 @@
+{
+  "apiVersion": "batch/v1", "kind": "CronJob",
+  "metadata": {"name": "backup", "namespace": "default"},
+  "spec": {"schedule": "0 2 * * *", "concurrencyPolicy": "Forbid", "suspend": false,
+    "successfulJobsHistoryLimit": 3, "failedJobsHistoryLimit": 1,
+    "jobTemplate": {"spec": {"template": {"spec": {"restartPolicy": "Never",
+      "containers": [{"name": "backup", "image": "backup:1"}]}}}}},
+  "status": {"lastScheduleTime": "2026-07-02T02:00:00Z",
+    "active": [{"apiVersion": "batch/v1", "kind": "Job", "name": "backup-29123", "namespace": "default"}]}
+}
