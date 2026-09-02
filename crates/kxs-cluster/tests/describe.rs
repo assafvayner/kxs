@@ -91,3 +91,39 @@ fn pod() {
         &Lookups::default(),
     );
 }
+
+#[test]
+fn deployment() {
+    golden(
+        "deployment",
+        &kind("apps", "v1", "Deployment", "deployments", true),
+        &Lookups::default(),
+    );
+}
+
+#[test]
+fn replicaset() {
+    golden(
+        "replicaset",
+        &kind("apps", "v1", "ReplicaSet", "replicasets", true),
+        &Lookups::default(),
+    );
+}
+
+#[test]
+fn statefulset() {
+    golden(
+        "statefulset",
+        &kind("apps", "v1", "StatefulSet", "statefulsets", true),
+        &Lookups::default(),
+    );
+}
+
+#[test]
+fn daemonset() {
+    golden(
+        "daemonset",
+        &kind("apps", "v1", "DaemonSet", "daemonsets", true),
+        &Lookups::default(),
+    );
+}

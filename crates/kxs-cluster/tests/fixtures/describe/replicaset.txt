@@ -1,0 +1,21 @@
+Name:  web-7d9f
+Namespace:  default
+Selector:  app=web
+Labels:  app=web
+Annotations:  deployment.kubernetes.io/revision: 3
+Controlled By:  Deployment/web
+Replicas:  3 current / 3 desired
+Pods Status:  0 Running / 0 Waiting / 0 Succeeded / 0 Failed
+Pod Template:
+  Labels:  app=web
+  Containers:
+    web:
+      Image:  nginx:1.27
+      Port:  <none>
+      Host Port:  <none>
+      Environment:  <none>
+      Mounts:  <none>
+  Volumes:  <none>
+  Node-Selectors:  <none>
+  Tolerations:  <none>
+Events:  <none>

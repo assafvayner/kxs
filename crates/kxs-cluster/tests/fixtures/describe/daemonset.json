@@ -1,0 +1,9 @@
+{
+  "apiVersion": "apps/v1", "kind": "DaemonSet",
+  "metadata": {"name": "agent", "namespace": "kube-system", "labels": {"app": "agent"}},
+  "spec": {"selector": {"matchLabels": {"app": "agent"}},
+    "template": {"metadata": {"labels": {"app": "agent"}},
+      "spec": {"nodeSelector": {"kubernetes.io/os": "linux"}, "containers": [{"name": "agent", "image": "agent:2"}]}}},
+  "status": {"desiredNumberScheduled": 3, "currentNumberScheduled": 3, "numberReady": 3,
+    "updatedNumberScheduled": 3, "numberAvailable": 3, "numberMisscheduled": 0}
+}

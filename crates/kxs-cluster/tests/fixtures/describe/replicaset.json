@@ -1,0 +1,10 @@
+{
+  "apiVersion": "apps/v1", "kind": "ReplicaSet",
+  "metadata": {"name": "web-7d9f", "namespace": "default", "labels": {"app": "web"},
+    "annotations": {"deployment.kubernetes.io/revision": "3"},
+    "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment", "name": "web", "uid": "d1", "controller": true}]},
+  "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "web"}},
+    "template": {"metadata": {"labels": {"app": "web"}},
+      "spec": {"containers": [{"name": "web", "image": "nginx:1.27"}]}}},
+  "status": {"replicas": 3, "readyReplicas": 3}
+}

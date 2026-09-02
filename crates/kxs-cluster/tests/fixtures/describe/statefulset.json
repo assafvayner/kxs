@@ -1,0 +1,11 @@
+{
+  "apiVersion": "apps/v1", "kind": "StatefulSet",
+  "metadata": {"name": "db", "namespace": "default", "creationTimestamp": "2026-07-01T00:00:00Z", "labels": {"app": "db"}},
+  "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "db"}}, "serviceName": "db",
+    "updateStrategy": {"type": "RollingUpdate", "rollingUpdate": {"partition": 0}},
+    "template": {"metadata": {"labels": {"app": "db"}},
+      "spec": {"containers": [{"name": "db", "image": "postgres:16"}]}},
+    "volumeClaimTemplates": [{"metadata": {"name": "data"},
+      "spec": {"storageClassName": "gp3", "accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "10Gi"}}}}]},
+  "status": {"replicas": 3, "readyReplicas": 3}
+}

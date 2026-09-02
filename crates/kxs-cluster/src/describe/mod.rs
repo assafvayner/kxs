@@ -9,11 +9,12 @@ pub mod generic;
 pub mod header;
 pub mod pod;
 pub mod util;
+pub mod workloads;
 pub mod writer;
 
 use crate::discovery::ResourceKind;
 use crate::resources::{api_resource, get_events, ResourceEvent};
-use k8s_openapi::api::apps::v1::ReplicaSet;
+use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::core::v1::{Endpoints, LimitRange, Pod, ResourceQuota, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::chrono::{DateTime, Utc};
@@ -66,7 +67,7 @@ fn write_kind(
     now: DateTime<Utc>,
 ) -> bool {
     let now_ms = now.timestamp_millis();
-    let _ = (lookups, now_ms);
+    let _ = now_ms;
     macro_rules! typed {
         ($t:ty, |$o:ident| $body:expr) => {
             typed!($t, |$o| $body, true)
@@ -81,6 +82,26 @@ fn write_kind(
     #[allow(clippy::single_match)]
     match (kind.group.as_str(), kind.kind.as_str()) {
         ("", "Pod") => typed!(Pod, |o| pod::write(w, &o)),
+        ("apps", "Deployment") => typed!(Deployment, |o| workloads::write_deployment(
+            w,
+            &o,
+            &lookups.replica_sets
+        )),
+        ("apps", "ReplicaSet") => typed!(ReplicaSet, |o| workloads::write_replicaset(
+            w,
+            &o,
+            &lookups.pods
+        )),
+        ("apps", "StatefulSet") => typed!(StatefulSet, |o| workloads::write_statefulset(
+            w,
+            &o,
+            &lookups.pods
+        )),
+        ("apps", "DaemonSet") => typed!(DaemonSet, |o| workloads::write_daemonset(
+            w,
+            &o,
+            &lookups.pods
+        )),
         _ => {}
     }
     generic::write(w, value, kind.namespaced);
