@@ -1,0 +1,43 @@
+{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "name": "web-1",
+    "namespace": "default",
+    "labels": {"app": "web", "tier": "frontend"},
+    "ownerReferences": [{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "web-7d9f", "uid": "rs1", "controller": true}]
+  },
+  "spec": {
+    "serviceAccountName": "default",
+    "nodeName": "node-a",
+    "priority": 0,
+    "containers": [{
+      "name": "web",
+      "image": "nginx:1.27",
+      "ports": [{"containerPort": 80, "protocol": "TCP"}],
+      "resources": {"limits": {"cpu": "500m", "memory": "128Mi"}, "requests": {"cpu": "100m", "memory": "64Mi"}},
+      "env": [
+        {"name": "MODE", "value": "prod"},
+        {"name": "TOKEN", "valueFrom": {"secretKeyRef": {"name": "s", "key": "token"}}}
+      ],
+      "volumeMounts": [{"name": "cfg", "mountPath": "/etc/cfg", "readOnly": true}],
+      "readinessProbe": {"httpGet": {"path": "/healthz", "port": 80}, "periodSeconds": 5}
+    }],
+    "volumes": [{"name": "cfg", "configMap": {"name": "cfg"}}],
+    "tolerations": [{"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 300}]
+  },
+  "status": {
+    "phase": "Running",
+    "hostIP": "10.0.0.1",
+    "podIP": "10.0.1.4",
+    "podIPs": [{"ip": "10.0.1.4"}],
+    "startTime": "2026-07-01T00:00:00Z",
+    "qosClass": "Burstable",
+    "conditions": [{"type": "Initialized", "status": "True"}, {"type": "Ready", "status": "True"}],
+    "containerStatuses": [{
+      "name": "web", "image": "nginx:1.27", "imageID": "docker.io/library/nginx@sha256:abc",
+      "containerID": "containerd://abc", "ready": true, "restartCount": 0,
+      "state": {"running": {"startedAt": "2026-07-01T00:00:05Z"}}
+    }]
+  }
+}

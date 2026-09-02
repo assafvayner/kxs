@@ -1,0 +1,50 @@
+Name:  web-1
+Namespace:  default
+Priority:  0
+Service Account:  default
+Node:  node-a/10.0.0.1
+Start Time:  Wed, 01 Jul 2026 00:00:00 +0000
+Labels:  app=web
+                  tier=frontend
+Annotations:  <none>
+Status:  Running
+IP:  10.0.1.4
+IPs:
+  IP:  10.0.1.4
+Controlled By:  ReplicaSet/web-7d9f
+Containers:
+  web:
+    Container ID:  containerd://abc
+    Image:  nginx:1.27
+    Image ID:  docker.io/library/nginx@sha256:abc
+    Port:  80/TCP
+    Host Port:  0/TCP
+    State:  Running
+      Started:  Wed, 01 Jul 2026 00:00:05 +0000
+    Ready:  True
+    Restart Count:  0
+    Limits:
+      cpu:  500m
+      memory:  128Mi
+    Requests:
+      cpu:  100m
+      memory:  64Mi
+    Readiness:  http-get http://:80/healthz delay=0s timeout=1s period=5s #success=1 #failure=3
+    Environment:
+      MODE:  prod
+      TOKEN:  <set to the key 'token' in secret 's'>  Optional: false
+    Mounts:
+      /etc/cfg from cfg (ro)
+Conditions:
+  Type  Status
+  Initialized  True
+  Ready  True
+Volumes:
+  cfg:
+    Type:  ConfigMap (a volume populated by a ConfigMap)
+    Name:  cfg
+    Optional:  false
+QoS Class:  Burstable
+Node-Selectors:  <none>
+Tolerations:  node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+Events:  <none>

@@ -7,6 +7,7 @@
 pub mod events;
 pub mod generic;
 pub mod header;
+pub mod pod;
 pub mod util;
 pub mod writer;
 
@@ -64,7 +65,24 @@ fn write_kind(
     lookups: &Lookups,
     now: DateTime<Utc>,
 ) -> bool {
-    let _ = (lookups, now);
+    let now_ms = now.timestamp_millis();
+    let _ = (lookups, now_ms);
+    macro_rules! typed {
+        ($t:ty, |$o:ident| $body:expr) => {
+            typed!($t, |$o| $body, true)
+        };
+        ($t:ty, |$o:ident| $body:expr, $events:expr) => {
+            if let Ok($o) = serde_json::from_value::<$t>(value.clone()) {
+                $body;
+                return $events;
+            }
+        };
+    }
+    #[allow(clippy::single_match)]
+    match (kind.group.as_str(), kind.kind.as_str()) {
+        ("", "Pod") => typed!(Pod, |o| pod::write(w, &o)),
+        _ => {}
+    }
     generic::write(w, value, kind.namespaced);
     true
 }

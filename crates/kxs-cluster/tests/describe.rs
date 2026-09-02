@@ -82,3 +82,12 @@ fn generic_crd_instance() {
         &Lookups::default(),
     );
 }
+
+#[test]
+fn pod() {
+    golden(
+        "pod",
+        &kind("", "v1", "Pod", "pods", true),
+        &Lookups::default(),
+    );
+}
