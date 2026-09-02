@@ -8,6 +8,7 @@ pub mod batch;
 pub mod events;
 pub mod generic;
 pub mod header;
+pub mod network;
 pub mod pod;
 pub mod util;
 pub mod workloads;
@@ -17,7 +18,8 @@ use crate::discovery::ResourceKind;
 use crate::resources::{api_resource, get_events, ResourceEvent};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::batch::v1::{CronJob, Job};
-use k8s_openapi::api::core::v1::{Endpoints, LimitRange, Pod, ResourceQuota, Secret};
+use k8s_openapi::api::core::v1::{Endpoints, LimitRange, Pod, ResourceQuota, Secret, Service};
+use k8s_openapi::api::networking::v1::Ingress;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::chrono::{DateTime, Utc};
 use kube::api::{Api, DynamicObject, ListParams};
@@ -106,6 +108,13 @@ fn write_kind(
         )),
         ("batch", "Job") => typed!(Job, |o| batch::write_job(w, &o)),
         ("batch", "CronJob") => typed!(CronJob, |o| batch::write_cronjob(w, &o)),
+        ("", "Service") => typed!(Service, |o| network::write_service(
+            w,
+            &o,
+            lookups.endpoints.as_ref()
+        )),
+        ("", "Endpoints") => typed!(Endpoints, |o| network::write_endpoints(w, &o)),
+        ("networking.k8s.io", "Ingress") => typed!(Ingress, |o| network::write_ingress(w, &o)),
         _ => {}
     }
     generic::write(w, value, kind.namespaced);

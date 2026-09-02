@@ -1,0 +1,16 @@
+Name:  web
+Labels:  <none>
+Namespace:  default
+Address:  203.0.113.10
+Ingress Class:  nginx
+Default backend:  <default>
+TLS:
+  web-tls terminates example.com
+Rules:
+  Host  Path  Backends
+  ----  ----  --------
+  example.com
+    /  web:80
+    /api  api:http
+Annotations:  nginx.ingress.kubernetes.io/rewrite-target: /
+Events:  <none>

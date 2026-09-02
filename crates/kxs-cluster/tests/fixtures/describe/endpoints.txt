@@ -1,0 +1,12 @@
+Name:  web
+Namespace:  default
+Labels:  <none>
+Annotations:  endpoints.kubernetes.io/last-change-trigger-time: 2026-07-01T00:00:00Z
+Subsets:
+  Addresses:  10.0.1.4,10.0.1.5
+  NotReadyAddresses:  <none>
+  Ports:
+    Name  Port  Protocol
+    ----  ----  --------
+    http  8080  TCP
+Events:  <none>

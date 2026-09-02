@@ -6,6 +6,7 @@
 //! leading whitespace kept, internal runs of 2+ spaces collapsed to two.
 //! Run with `UPDATE_GOLDENS=1` to rewrite the `.txt` files from actual output.
 
+use k8s_openapi::api::core::v1::{EndpointAddress, EndpointPort, EndpointSubset, Endpoints};
 use k8s_openapi::chrono::{DateTime, Utc};
 use kxs_cluster::describe::{describe_value, Lookups};
 use kxs_cluster::discovery::ResourceKind;
@@ -142,6 +143,58 @@ fn cronjob() {
     golden(
         "cronjob",
         &kind("batch", "v1", "CronJob", "cronjobs", true),
+        &Lookups::default(),
+    );
+}
+
+#[test]
+fn service_with_endpoints() {
+    let endpoints = Endpoints {
+        subsets: Some(vec![EndpointSubset {
+            addresses: Some(vec![
+                EndpointAddress {
+                    ip: "10.0.1.4".into(),
+                    ..Default::default()
+                },
+                EndpointAddress {
+                    ip: "10.0.1.5".into(),
+                    ..Default::default()
+                },
+            ]),
+            ports: Some(vec![EndpointPort {
+                name: Some("http".into()),
+                port: 8080,
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+    let lookups = Lookups {
+        endpoints: Some(endpoints),
+        ..Default::default()
+    };
+    golden(
+        "service",
+        &kind("", "v1", "Service", "services", true),
+        &lookups,
+    );
+}
+
+#[test]
+fn endpoints() {
+    golden(
+        "endpoints",
+        &kind("", "v1", "Endpoints", "endpoints", true),
+        &Lookups::default(),
+    );
+}
+
+#[test]
+fn ingress() {
+    golden(
+        "ingress",
+        &kind("networking.k8s.io", "v1", "Ingress", "ingresses", true),
         &Lookups::default(),
     );
 }
