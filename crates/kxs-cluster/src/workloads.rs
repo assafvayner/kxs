@@ -40,6 +40,27 @@ pub async fn workload_pods(
     Ok(names)
 }
 
+/// The label selector string of a workload ("k1=v1,k2=v2"), for driving a pod
+/// watch from a pod-owner row. Errors when the workload has no usable selector.
+pub async fn workload_selector(
+    client: Client,
+    group: &str,
+    version: &str,
+    kind: &str,
+    plural: &str,
+    namespace: &str,
+    name: &str,
+) -> Result<String, String> {
+    let ar = crate::resources::api_resource(group, version, kind, plural);
+    let api: Api<DynamicObject> = Api::namespaced_with(client, namespace, &ar);
+    let obj = api
+        .get_opt(name)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("{kind} \"{name}\" not found"))?;
+    selector_from_spec(&obj.data).ok_or_else(|| format!("{kind} \"{name}\" has no label selector"))
+}
+
 /// "k1=v1,k2=v2" from `.spec.selector.matchLabels`, or from a bare label map
 /// (`.spec.selector` on Services). None when there is no usable label map.
 fn selector_from_spec(data: &serde_json::Value) -> Option<String> {
