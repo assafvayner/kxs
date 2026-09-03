@@ -32,9 +32,26 @@ Containers:
     Readiness:  http-get http://:80/healthz delay=0s timeout=1s period=5s #success=1 #failure=3
     Environment:
       MODE:  prod
+      POD_IP:  (v1:status.podIP)
       TOKEN:  <set to the key 'token' in secret 's'>  Optional: false
     Mounts:
       /etc/cfg from cfg (ro)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access (ro)
+Ephemeral Containers:
+  debugger:
+    Container ID:  containerd://def
+    Image:  busybox:1.36
+    Image ID:  docker.io/library/busybox@sha256:def
+    Port:  <none>
+    Host Port:  <none>
+    Command:
+      sh
+    State:  Running
+      Started:  Fri, 03 Jul 2026 11:00:00 +0000
+    Ready:  False
+    Restart Count:  0
+    Environment:  <none>
+    Mounts:  <none>
 Conditions:
   Type  Status
   Initialized  True
@@ -44,7 +61,14 @@ Volumes:
     Type:  ConfigMap (a volume populated by a ConfigMap)
     Name:  cfg
     Optional:  false
+  kube-api-access:
+    Type:  Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:  kube-root-ca.crt
+    Optional:  false
+    DownwardAPI:  true
 QoS Class:  Burstable
 Node-Selectors:  <none>
 Tolerations:  node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+Topology Spread Constraints:  kubernetes.io/hostname:ScheduleAnyway when max skew 1 is exceeded for selector app=web
 Events:  <none>

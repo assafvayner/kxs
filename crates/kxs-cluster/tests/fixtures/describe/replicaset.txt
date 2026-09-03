@@ -9,12 +9,12 @@ Pods Status:  0 Running / 0 Waiting / 0 Succeeded / 0 Failed
 Pod Template:
   Labels:  app=web
   Containers:
-    web:
-      Image:  nginx:1.27
-      Port:  <none>
-      Host Port:  <none>
-      Environment:  <none>
-      Mounts:  <none>
+   web:
+    Image:  nginx:1.27
+    Port:  <none>
+    Host Port:  <none>
+    Environment:  <none>
+    Mounts:  <none>
   Volumes:  <none>
   Node-Selectors:  <none>
   Tolerations:  <none>

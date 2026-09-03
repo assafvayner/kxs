@@ -15,12 +15,12 @@ Completions:  <unset>
 Pod Template:
   Labels:  <none>
   Containers:
-    backup:
-      Image:  backup:1
-      Port:  <none>
-      Host Port:  <none>
-      Environment:  <none>
-      Mounts:  <none>
+   backup:
+    Image:  backup:1
+    Port:  <none>
+    Host Port:  <none>
+    Environment:  <none>
+    Mounts:  <none>
   Volumes:  <none>
   Node-Selectors:  <none>
   Tolerations:  <none>

@@ -11,12 +11,12 @@ Pods Status:  0 Running / 0 Waiting / 0 Succeeded / 0 Failed
 Pod Template:
   Labels:  app=db
   Containers:
-    db:
-      Image:  postgres:16
-      Port:  <none>
-      Host Port:  <none>
-      Environment:  <none>
-      Mounts:  <none>
+   db:
+    Image:  postgres:16
+    Port:  <none>
+    Host Port:  <none>
+    Environment:  <none>
+    Mounts:  <none>
   Volumes:  <none>
   Node-Selectors:  <none>
   Tolerations:  <none>

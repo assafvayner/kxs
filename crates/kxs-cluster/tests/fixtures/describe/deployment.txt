@@ -11,12 +11,12 @@ RollingUpdateStrategy:  25% max unavailable, 25% max surge
 Pod Template:
   Labels:  app=web
   Containers:
-    web:
-      Image:  nginx:1.27
-      Port:  80/TCP
-      Host Port:  0/TCP
-      Environment:  <none>
-      Mounts:  <none>
+   web:
+    Image:  nginx:1.27
+    Port:  80/TCP
+    Host Port:  0/TCP
+    Environment:  <none>
+    Mounts:  <none>
   Volumes:  <none>
   Node-Selectors:  <none>
   Tolerations:  <none>

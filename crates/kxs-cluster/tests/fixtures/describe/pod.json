@@ -5,6 +5,7 @@
     "name": "web-1",
     "namespace": "default",
     "labels": {"app": "web", "tier": "frontend"},
+    "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "{\"spec\":{\"containers\":[{\"name\":\"web\"}]}}"},
     "ownerReferences": [{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "web-7d9f", "uid": "rs1", "controller": true}]
   },
   "spec": {
@@ -18,13 +19,36 @@
       "resources": {"limits": {"cpu": "500m", "memory": "128Mi"}, "requests": {"cpu": "100m", "memory": "64Mi"}},
       "env": [
         {"name": "MODE", "value": "prod"},
+        {"name": "POD_IP", "valueFrom": {"fieldRef": {"apiVersion": "v1", "fieldPath": "status.podIP"}}},
         {"name": "TOKEN", "valueFrom": {"secretKeyRef": {"name": "s", "key": "token"}}}
       ],
-      "volumeMounts": [{"name": "cfg", "mountPath": "/etc/cfg", "readOnly": true}],
+      "volumeMounts": [
+        {"name": "cfg", "mountPath": "/etc/cfg", "readOnly": true},
+        {"name": "kube-api-access", "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount", "readOnly": true}
+      ],
       "readinessProbe": {"httpGet": {"path": "/healthz", "port": 80}, "periodSeconds": 5}
     }],
-    "volumes": [{"name": "cfg", "configMap": {"name": "cfg"}}],
-    "tolerations": [{"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 300}]
+    "ephemeralContainers": [{
+      "name": "debugger",
+      "image": "busybox:1.36",
+      "command": ["sh"],
+      "targetContainerName": "web"
+    }],
+    "volumes": [
+      {"name": "cfg", "configMap": {"name": "cfg"}},
+      {"name": "kube-api-access", "projected": {"sources": [
+        {"serviceAccountToken": {"path": "token", "expirationSeconds": 3607}},
+        {"configMap": {"name": "kube-root-ca.crt"}},
+        {"downwardAPI": {"items": [{"path": "namespace", "fieldRef": {"fieldPath": "metadata.namespace"}}]}}
+      ]}}
+    ],
+    "tolerations": [{"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 300}],
+    "topologySpreadConstraints": [{
+      "maxSkew": 1,
+      "topologyKey": "kubernetes.io/hostname",
+      "whenUnsatisfiable": "ScheduleAnyway",
+      "labelSelector": {"matchLabels": {"app": "web"}}
+    }]
   },
   "status": {
     "phase": "Running",
@@ -38,6 +62,11 @@
       "name": "web", "image": "nginx:1.27", "imageID": "docker.io/library/nginx@sha256:abc",
       "containerID": "containerd://abc", "ready": true, "restartCount": 0,
       "state": {"running": {"startedAt": "2026-07-01T00:00:05Z"}}
+    }],
+    "ephemeralContainerStatuses": [{
+      "name": "debugger", "image": "busybox:1.36", "imageID": "docker.io/library/busybox@sha256:def",
+      "containerID": "containerd://def", "ready": false, "restartCount": 0,
+      "state": {"running": {"startedAt": "2026-07-03T11:00:00Z"}}
     }]
   }
 }

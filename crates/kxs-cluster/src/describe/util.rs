@@ -2,14 +2,32 @@ use super::writer::Writer;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, Time};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
+use kxs_core::format::human_duration;
 use std::collections::BTreeMap;
 
 pub const NONE: &str = "<none>";
 pub const UNSET: &str = "<unset>";
+pub const UNKNOWN: &str = "<unknown>";
 
 /// kubectl prints timestamps as RFC1123Z: `Wed, 01 Jul 2026 00:00:00 +0000`.
 pub fn rfc1123z(t: &Time) -> String {
     t.0.format("%a, %d %b %Y %H:%M:%S %z").to_string()
+}
+
+/// kubectl's status for an object with a deletion timestamp.
+pub fn terminating_status(deletion_timestamp: &Time, now_ms: i64) -> String {
+    let seconds = (now_ms - deletion_timestamp.0.timestamp_millis()) / 1000;
+    format!("Terminating (lasts {})", human_duration(seconds))
+}
+
+/// kubectl's `labels.FormatLabels`: sorted `k=v` pairs on one comma-joined line.
+pub fn format_labels(m: Option<&BTreeMap<String, String>>) -> String {
+    let pairs = map_lines(m);
+    if pairs.is_empty() {
+        NONE.to_string()
+    } else {
+        pairs.join(",")
+    }
 }
 
 pub fn or_none(s: Option<&str>) -> &str {
@@ -159,6 +177,45 @@ pub fn title_case(key: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Helpers shared by the describer unit tests. The golden harness in
+/// `tests/describe.rs` carries its own copy of `normalize` because integration
+/// tests cannot see `#[cfg(test)]` items.
+#[cfg(test)]
+pub mod test_support {
+    /// Collapses alignment padding — trailing whitespace trimmed, leading
+    /// whitespace kept, internal runs of 2+ spaces reduced to two — so
+    /// assertions do not have to encode column widths.
+    pub fn normalize(value: &str) -> String {
+        let mut output = String::new();
+        for line in value.lines() {
+            let line = line.trim_end();
+            let leading = line.len() - line.trim_start().len();
+            output.push_str(&line[..leading]);
+            let mut spaces = 0;
+            for character in line[leading..].chars() {
+                if character == ' ' {
+                    spaces += 1;
+                    continue;
+                }
+                if spaces > 0 {
+                    output.push_str(if spaces > 1 { "  " } else { " " });
+                    spaces = 0;
+                }
+                output.push(character);
+            }
+            output.push('\n');
+        }
+        output
+    }
+
+    /// The slice of `output` from the first `start` up to the following `end`.
+    pub fn block<'a>(output: &'a str, start: &str, end: &str) -> &'a str {
+        let start = output.find(start).unwrap();
+        let end = output[start..].find(end).unwrap() + start;
+        &output[start..end]
+    }
 }
 
 #[cfg(test)]

@@ -1,15 +1,20 @@
 use super::header::{annotation_lines, write_controlled_by, write_labels_annotations};
 use super::util::{
-    bool_title, int_or_string, map_lines, or_none, rfc1123z, write_list, write_quantities, NONE,
-    UNSET,
+    bool_title, int_or_string, map_lines, or_none, rfc1123z, selector_string, terminating_status,
+    write_list, write_quantities, NONE, UNKNOWN, UNSET,
 };
 use super::writer::Writer;
 use k8s_openapi::api::core::v1::{
-    Container, ContainerState, ContainerStatus, EnvFromSource, Pod, PodTemplateSpec, Probe,
-    Toleration, Volume,
+    Container, ContainerState, ContainerStatus, EnvFromSource, EphemeralContainer, Pod,
+    PodTemplateSpec, Probe, Toleration, TopologySpreadConstraint, Volume,
 };
 
-pub fn write(w: &mut Writer, pod: &Pod) {
+/// kubectl's pod-template `space`: the section header moves down a level and
+/// each container or volume name gains one extra space, keeping their fields at
+/// kubectl's LEVEL_2.
+const TEMPLATE_NAME_PREFIX: &str = " ";
+
+pub fn write(w: &mut Writer, pod: &Pod, now_ms: i64) {
     let meta = &pod.metadata;
     let spec = pod.spec.as_ref();
     let status = pod.status.as_ref();
@@ -39,11 +44,22 @@ pub fn write(w: &mut Writer, pod: &Pod) {
         w.kv(0, "Start Time", rfc1123z(t));
     }
     write_labels_annotations(w, meta);
-    w.kv(
-        0,
-        "Status",
-        or_none(status.and_then(|s| s.phase.as_deref())),
-    );
+    let phase = status.and_then(|s| s.phase.as_deref());
+    let terminating = meta
+        .deletion_timestamp
+        .as_ref()
+        .filter(|_| !matches!(phase, Some("Failed") | Some("Succeeded")));
+    match terminating {
+        Some(deletion_timestamp) => {
+            w.kv(0, "Status", terminating_status(deletion_timestamp, now_ms));
+            w.kv(
+                0,
+                "Termination Grace Period",
+                format!("{}s", meta.deletion_grace_period_seconds.unwrap_or(0)),
+            );
+        }
+        None => w.kv(0, "Status", or_none(phase)),
+    }
     if let Some(r) = status.and_then(|s| s.reason.as_deref()) {
         w.kv(0, "Reason", r);
     }
@@ -69,6 +85,7 @@ pub fn write(w: &mut Writer, pod: &Pod) {
             write_containers(
                 w,
                 0,
+                "",
                 "Init Containers",
                 ic,
                 status.and_then(|st| st.init_container_statuses.as_deref()),
@@ -78,11 +95,24 @@ pub fn write(w: &mut Writer, pod: &Pod) {
         write_containers(
             w,
             0,
+            "",
             "Containers",
             &s.containers,
             status.and_then(|st| st.container_statuses.as_deref()),
             Some(pod),
         );
+        if let Some(ec) = s.ephemeral_containers.as_deref().filter(|v| !v.is_empty()) {
+            let containers: Vec<Container> = ec.iter().map(ephemeral_as_container).collect();
+            write_containers(
+                w,
+                0,
+                "",
+                "Ephemeral Containers",
+                &containers,
+                status.and_then(|st| st.ephemeral_container_statuses.as_deref()),
+                Some(pod),
+            );
+        }
     }
     if let Some(conds) = status
         .and_then(|s| s.conditions.as_ref())
@@ -94,7 +124,7 @@ pub fn write(w: &mut Writer, pod: &Pod) {
             w.cells(1, &[&c.type_, &c.status]);
         }
     }
-    write_volumes(w, 0, spec.and_then(|s| s.volumes.as_deref()));
+    write_volumes(w, 0, "", spec.and_then(|s| s.volumes.as_deref()));
     w.kv(
         0,
         "QoS Class",
@@ -112,32 +142,63 @@ pub fn write(w: &mut Writer, pod: &Pod) {
         "Tolerations",
         &toleration_lines(spec.and_then(|s| s.tolerations.as_deref())),
     );
+    write_topology_spread_constraints(
+        w,
+        0,
+        spec.and_then(|s| s.topology_spread_constraints.as_deref()),
+    );
+}
+
+/// kubectl converts each `EphemeralContainerCommon` to a `Container` before
+/// printing it; the two field sets differ only in `targetContainerName`.
+fn ephemeral_as_container(ec: &EphemeralContainer) -> Container {
+    serde_json::to_value(ec)
+        .and_then(serde_json::from_value)
+        .unwrap_or_else(|_| Container {
+            name: ec.name.clone(),
+            image: ec.image.clone(),
+            ..Default::default()
+        })
 }
 
 /// `Containers:` / `Init Containers:` section; statuses are matched by name.
+/// `name_prefix` is kubectl's pod-template `space`: when it is set the header
+/// keeps `level` and each container name sits at `level` plus that prefix
+/// rather than a whole level deeper.
 pub fn write_containers(
     w: &mut Writer,
     level: usize,
+    name_prefix: &str,
     key: &str,
     containers: &[Container],
     statuses: Option<&[ContainerStatus]>,
     pod: Option<&Pod>,
 ) {
+    let name_level = name_level(level, name_prefix);
     w.section(level, key);
     for c in containers {
         let st = statuses.and_then(|s| s.iter().find(|s| s.name == c.name));
-        write_container(w, level + 1, c, st, pod);
+        write_container(w, name_level, name_prefix, c, st, pod);
+    }
+}
+
+fn name_level(level: usize, name_prefix: &str) -> usize {
+    if name_prefix.is_empty() {
+        level + 1
+    } else {
+        level
     }
 }
 
 pub fn write_container(
     w: &mut Writer,
     level: usize,
+    name_prefix: &str,
     c: &Container,
     st: Option<&ContainerStatus>,
     pod: Option<&Pod>,
 ) {
-    w.section(level, &c.name);
+    w.section(level, &format!("{name_prefix}{}", c.name));
     let i = level + 1;
     if let Some(s) = st {
         w.kv(i, "Container ID", s.container_id.as_deref().unwrap_or(""));
@@ -467,7 +528,6 @@ fn write_env(w: &mut Writer, level: usize, c: &Container, pod: Option<&Pod>) {
     }
     w.section(level, "Environment");
     for e in env {
-        let key = format!("{}:", e.name);
         match (&e.value, &e.value_from) {
             (Some(v), _) => write_multiline_value(w, level + 1, &e.name, v),
             (None, Some(from)) => {
@@ -489,15 +549,17 @@ fn write_env(w: &mut Writer, level: usize, c: &Container, pod: Option<&Pod>) {
                         format!("{} ({})", container_resource_value(c, r), r.resource),
                     );
                 } else if let Some(s) = &from.secret_key_ref {
+                    let key = format!("{}:", e.name);
                     let v = format!("<set to the key '{}' in secret '{}'>", s.key, s.name);
                     let o = format!("Optional: {}", s.optional.unwrap_or(false));
                     w.cells(level + 1, &[&key, &v, &o]);
                 } else if let Some(c) = &from.config_map_key_ref {
+                    let key = format!("{}:", e.name);
                     let v = format!("<set to the key '{}' of config map '{}'>", c.key, c.name);
                     let o = format!("Optional: {}", c.optional.unwrap_or(false));
                     w.cells(level + 1, &[&key, &v, &o]);
                 } else {
-                    w.kv(level + 1, &e.name, "<unknown>");
+                    w.kv(level + 1, &e.name, UNKNOWN);
                 }
             }
             (None, None) => w.kv(level + 1, &e.name, ""),
@@ -531,15 +593,16 @@ fn write_env_from(w: &mut Writer, level: usize, env_from: &[EnvFromSource]) {
     }
 }
 
-pub fn write_volumes(w: &mut Writer, level: usize, volumes: Option<&[Volume]>) {
+pub fn write_volumes(w: &mut Writer, level: usize, name_prefix: &str, volumes: Option<&[Volume]>) {
     let Some(vols) = volumes.filter(|v| !v.is_empty()) else {
         w.kv(level, "Volumes", NONE);
         return;
     };
+    let name_level = name_level(level, name_prefix);
     w.section(level, "Volumes");
     for v in vols {
-        w.section(level + 1, &v.name);
-        let i = level + 2;
+        w.section(name_level, &format!("{name_prefix}{}", v.name));
+        let i = name_level + 1;
         if let Some(c) = &v.config_map {
             w.kv(i, "Type", "ConfigMap (a volume populated by a ConfigMap)");
             w.kv(i, "Name", &c.name);
@@ -598,7 +661,7 @@ pub fn write_volumes(w: &mut Writer, level: usize, volumes: Option<&[Volume]>) {
                 }
             }
         } else {
-            w.kv(i, "Type", "<unknown>");
+            w.kv(i, "Type", UNKNOWN);
         }
     }
 }
@@ -639,6 +702,34 @@ pub fn toleration_lines(tols: Option<&[Toleration]>) -> Vec<String> {
         .collect()
 }
 
+/// `<topologyKey>:<whenUnsatisfiable> when max skew <n> is exceeded`, plus
+/// ` for selector <selector>` when the constraint carries one.
+fn write_topology_spread_constraints(
+    w: &mut Writer,
+    level: usize,
+    constraints: Option<&[TopologySpreadConstraint]>,
+) {
+    let Some(constraints) = constraints.filter(|c| !c.is_empty()) else {
+        return;
+    };
+    let mut sorted: Vec<&TopologySpreadConstraint> = constraints.iter().collect();
+    sorted.sort_by(|a, b| a.topology_key.cmp(&b.topology_key));
+    let lines: Vec<String> = sorted
+        .into_iter()
+        .map(|c| {
+            let mut line = format!(
+                "{}:{} when max skew {} is exceeded",
+                c.topology_key, c.when_unsatisfiable, c.max_skew
+            );
+            if let Some(selector) = &c.label_selector {
+                line.push_str(&format!(" for selector {}", selector_string(selector)));
+            }
+            line
+        })
+        .collect();
+    write_list(w, level, "Topology Spread Constraints", &lines);
+}
+
 /// `Pod Template:` block shared by every workload describer.
 pub fn write_pod_template(w: &mut Writer, level: usize, t: &PodTemplateSpec) {
     w.section(level, "Pod Template");
@@ -664,10 +755,27 @@ pub fn write_pod_template(w: &mut Writer, level: usize, t: &PodTemplateSpec) {
         w.kv(i, "Service Account", sa);
     }
     if let Some(ic) = spec.init_containers.as_deref().filter(|v| !v.is_empty()) {
-        write_containers(w, i, "Init Containers", ic, None, None);
+        write_containers(
+            w,
+            i,
+            TEMPLATE_NAME_PREFIX,
+            "Init Containers",
+            ic,
+            None,
+            None,
+        );
     }
-    write_containers(w, i, "Containers", &spec.containers, None, None);
-    write_volumes(w, i, spec.volumes.as_deref());
+    write_containers(
+        w,
+        i,
+        TEMPLATE_NAME_PREFIX,
+        "Containers",
+        &spec.containers,
+        None,
+        None,
+    );
+    write_volumes(w, i, TEMPLATE_NAME_PREFIX, spec.volumes.as_deref());
+    write_topology_spread_constraints(w, i, spec.topology_spread_constraints.as_deref());
     if let Some(pc) = spec.priority_class_name.as_deref() {
         w.kv(i, "Priority Class Name", pc);
     }
@@ -688,9 +796,12 @@ pub fn write_pod_template(w: &mut Writer, level: usize, t: &PodTemplateSpec) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::describe::util::test_support::normalize;
     use k8s_openapi::api::core::v1::{ExecAction, HTTPGetAction};
     use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
     use serde_json::json;
+
+    const NOW_MS: i64 = 1_783_080_000_000; // 2026-07-03T12:00:00Z
 
     fn container(value: serde_json::Value) -> Container {
         serde_json::from_value(value).unwrap()
@@ -772,7 +883,7 @@ mod tests {
         }));
         let container = &pod.spec.as_ref().unwrap().containers[0];
         let mut w = Writer::new();
-        write_container(&mut w, 0, container, None, Some(&pod));
+        write_container(&mut w, 0, "", container, None, Some(&pod));
         let output = w.finish();
         let pod_name = output
             .lines()
@@ -792,7 +903,7 @@ mod tests {
         );
 
         let mut w = Writer::new();
-        write_container(&mut w, 0, container, None, None);
+        write_container(&mut w, 0, "", container, None, None);
         let output = w.finish();
         let field_line = output
             .lines()
@@ -812,7 +923,7 @@ mod tests {
             "env": [{"name": "MULTI", "value": "alpha\nbeta"}]
         }));
         let mut w = Writer::new();
-        write_container(&mut w, 0, &container, None, None);
+        write_container(&mut w, 0, "", &container, None, None);
         let output = w.finish();
         assert!(output.contains("  Command:\n    first\n    second\n"));
         assert!(output.contains("  Args:\n    third\n    fourth\n"));
@@ -836,7 +947,7 @@ mod tests {
             }
         }));
         let mut w = Writer::new();
-        write(&mut w, &pod);
+        write(&mut w, &pod, NOW_MS);
         let output = w.finish();
         assert!(output.lines().any(|line| {
             line.split_whitespace().collect::<Vec<_>>().join(" ") == "IPs: <none>"
@@ -865,7 +976,7 @@ mod tests {
         }))
         .unwrap();
         let mut w = Writer::new();
-        write_volumes(&mut w, 0, Some(&[volume]));
+        write_volumes(&mut w, 0, "", Some(&[volume]));
         let output = w.finish();
         let token = output.find("TokenExpirationSeconds:").unwrap();
         let config_map = output.find("ConfigMapName:").unwrap();
@@ -876,6 +987,114 @@ mod tests {
         assert!(output.contains("SecretName:") && output.contains("credentials"));
         assert_eq!(output.matches("Optional:").count(), 2);
         assert!(!output.contains("ConfigMapOptional:"));
+    }
+
+    #[test]
+    fn deleted_pod_reports_termination_and_grace_period() {
+        let mut pod = pod(json!({
+            "metadata": {
+                "name": "web-1",
+                "namespace": "default",
+                "deletionTimestamp": "2026-07-03T11:50:00Z",
+                "deletionGracePeriodSeconds": 30
+            },
+            "spec": {"containers": []},
+            "status": {"phase": "Running"}
+        }));
+        let mut w = Writer::new();
+        write(&mut w, &pod, NOW_MS);
+        let output = normalize(&w.finish());
+        assert!(output.contains("Status:  Terminating (lasts 10m)\n"));
+        assert!(output.contains("Termination Grace Period:  30s\n"));
+
+        pod.status.as_mut().unwrap().phase = Some("Succeeded".into());
+        let mut w = Writer::new();
+        write(&mut w, &pod, NOW_MS);
+        let output = normalize(&w.finish());
+        assert!(output.contains("Status:  Succeeded\n"));
+        assert!(!output.contains("Termination Grace Period:"));
+    }
+
+    #[test]
+    fn topology_spread_constraints_are_sorted_and_omitted_when_empty() {
+        let constraints: Vec<TopologySpreadConstraint> = serde_json::from_value(json!([
+            {"maxSkew": 2, "topologyKey": "topology.kubernetes.io/zone", "whenUnsatisfiable": "DoNotSchedule"},
+            {
+                "maxSkew": 1,
+                "topologyKey": "kubernetes.io/hostname",
+                "whenUnsatisfiable": "ScheduleAnyway",
+                "labelSelector": {"matchLabels": {"app": "web"}}
+            }
+        ]))
+        .unwrap();
+        let mut w = Writer::new();
+        write_topology_spread_constraints(&mut w, 0, Some(&constraints));
+        assert_eq!(
+            normalize(&w.finish()),
+            concat!(
+                "Topology Spread Constraints:  kubernetes.io/hostname:ScheduleAnyway when max skew 1 is exceeded for selector app=web\n",
+                "                              topology.kubernetes.io/zone:DoNotSchedule when max skew 2 is exceeded\n",
+            )
+        );
+
+        let mut w = Writer::new();
+        write_topology_spread_constraints(&mut w, 0, Some(&[]));
+        write_topology_spread_constraints(&mut w, 0, None);
+        assert_eq!(w.finish(), "");
+    }
+
+    #[test]
+    fn ephemeral_containers_use_the_container_printer_and_their_statuses() {
+        let pod = pod(json!({
+            "metadata": {"name": "web-1", "namespace": "default"},
+            "spec": {
+                "containers": [{"name": "web", "image": "nginx"}],
+                "ephemeralContainers": [{
+                    "name": "debugger",
+                    "image": "busybox:1.36",
+                    "command": ["sh"],
+                    "targetContainerName": "web"
+                }]
+            },
+            "status": {
+                "phase": "Running",
+                "ephemeralContainerStatuses": [{
+                    "name": "debugger", "image": "busybox:1.36", "imageID": "sha256:def",
+                    "ready": false, "restartCount": 1, "state": {"waiting": {"reason": "Starting"}}
+                }]
+            }
+        }));
+        let mut w = Writer::new();
+        write(&mut w, &pod, NOW_MS);
+        let output = normalize(&w.finish());
+
+        let section = output.find("Ephemeral Containers:\n").unwrap();
+        assert!(section > output.find("Containers:\n").unwrap());
+        assert!(section < output.find("Volumes:").unwrap());
+        assert!(output.contains("  debugger:\n"));
+        assert!(output.contains("    Image:  busybox:1.36\n"));
+        assert!(output.contains("    State:  Waiting\n"));
+        assert!(output.contains("      Reason:  Starting\n"));
+        assert!(output.contains("    Restart Count:  1\n"));
+    }
+
+    #[test]
+    fn pod_template_indents_names_one_space_deeper_than_the_header() {
+        let template: PodTemplateSpec = serde_json::from_value(json!({
+            "metadata": {"labels": {"app": "web"}},
+            "spec": {
+                "containers": [{"name": "web", "image": "nginx", "resources": {"limits": {"cpu": "1"}}}],
+                "volumes": [{"name": "cfg", "configMap": {"name": "cfg"}}]
+            }
+        }))
+        .unwrap();
+        let mut w = Writer::new();
+        write_pod_template(&mut w, 0, &template);
+        let output = normalize(&w.finish());
+
+        assert!(output.contains("  Containers:\n   web:\n    Image:  nginx\n"));
+        assert!(output.contains("    Limits:\n      cpu:  1\n"));
+        assert!(output.contains("  Volumes:\n   cfg:\n    Type:  ConfigMap"));
     }
 
     #[test]
@@ -890,7 +1109,7 @@ mod tests {
             ]
         }));
         let mut w = Writer::new();
-        write_container(&mut w, 0, &container, None, None);
+        write_container(&mut w, 0, "", &container, None, None);
         let output = w.finish();
         assert!(output.find("/a from a").unwrap() < output.find("/z from z").unwrap());
         let env_from = output

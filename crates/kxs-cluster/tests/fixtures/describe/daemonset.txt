@@ -1,4 +1,5 @@
 Name:  agent
+Namespace:  kube-system
 Selector:  app=agent
 Node-Selector:  kubernetes.io/os=linux
 Labels:  app=agent
@@ -12,12 +13,12 @@ Pods Status:  0 Running / 0 Waiting / 0 Succeeded / 0 Failed
 Pod Template:
   Labels:  app=agent
   Containers:
-    agent:
-      Image:  agent:2
-      Port:  <none>
-      Host Port:  <none>
-      Environment:  <none>
-      Mounts:  <none>
+   agent:
+    Image:  agent:2
+    Port:  <none>
+    Host Port:  <none>
+    Environment:  <none>
+    Mounts:  <none>
   Volumes:  <none>
   Node-Selectors:  kubernetes.io/os=linux
   Tolerations:  <none>

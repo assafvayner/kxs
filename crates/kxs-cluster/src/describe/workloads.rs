@@ -1,6 +1,8 @@
 use super::header::{write_controlled_by, write_labels_annotations};
 use super::pod::write_pod_template;
-use super::util::{int_or_string, map_lines, or_none, rfc1123z, selector_string, write_list, NONE};
+use super::util::{
+    format_labels, int_or_string, map_lines, or_none, rfc1123z, selector_string, write_list, NONE,
+};
 use super::writer::Writer;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::core::v1::{Pod, PodTemplateSpec};
@@ -343,6 +345,7 @@ pub fn write_daemonset(w: &mut Writer, ds: &DaemonSet, pods: &[Pod]) {
     let spec = ds.spec.as_ref();
     let status = ds.status.as_ref();
     w.kv(0, "Name", or_none(meta.name.as_deref()));
+    w.kv(0, "Namespace", or_none(meta.namespace.as_deref()));
     w.kv(
         0,
         "Selector",
@@ -352,7 +355,7 @@ pub fn write_daemonset(w: &mut Writer, ds: &DaemonSet, pods: &[Pod]) {
     let node_selector = spec
         .and_then(|s| s.template.spec.as_ref())
         .and_then(|p| p.node_selector.as_ref());
-    write_list(w, 0, "Node-Selector", &map_lines(node_selector));
+    w.kv(0, "Node-Selector", format_labels(node_selector));
     write_labels_annotations(w, meta);
     w.kv(
         0,

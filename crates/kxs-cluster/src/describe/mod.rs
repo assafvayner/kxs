@@ -102,9 +102,8 @@ fn write_kind(
             }
         };
     }
-    #[allow(clippy::single_match)]
     match (kind.group.as_str(), kind.kind.as_str()) {
-        ("", "Pod") => typed!(Pod, |o| pod::write(w, &o)),
+        ("", "Pod") => typed!(Pod, |o| pod::write(w, &o, now_ms)),
         ("apps", "Deployment") => typed!(Deployment, |o| workloads::write_deployment(
             w,
             &o,
