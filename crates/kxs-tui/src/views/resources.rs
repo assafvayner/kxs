@@ -34,6 +34,8 @@ pub struct ResourcesView {
     sort: Option<Sort>,
     selected: Option<String>,
     handle: Option<StopHandle>,
+    /// Watch requested but `Started` not yet received.
+    pending: bool,
     status: Option<String>,
     viewport_rows: Cell<u16>,
 }
@@ -51,6 +53,7 @@ impl ResourcesView {
             sort: None,
             selected: None,
             handle: None,
+            pending: false,
             status: None,
             viewport_rows: Cell::new(20),
         }
@@ -148,7 +151,8 @@ impl ResourcesView {
         }
     }
 
-    fn restart_watch(&self) -> Cmd {
+    fn restart_watch(&mut self) -> Cmd {
+        self.pending = true;
         Cmd::StartTableWatch {
             view: self.id,
             kind: self.kind.clone(),
@@ -279,6 +283,7 @@ impl View for ResourcesView {
 
     fn on_started(&mut self, handle: StopHandle, _ctx: &AppCtx) -> Vec<Cmd> {
         self.handle = Some(handle);
+        self.pending = false;
         self.status = None;
         vec![]
     }
@@ -286,6 +291,10 @@ impl View for ResourcesView {
     fn on_msg(&mut self, msg: &crate::msg::Msg, ctx: &AppCtx) -> Vec<Cmd> {
         match msg {
             crate::msg::Msg::Tick => {
+                // initial watch start (issued from push_view's first tick)
+                if self.handle.is_none() && !self.pending {
+                    return vec![self.restart_watch()];
+                }
                 // follow namespace switches made outside this view
                 if self.handle.is_some() && ctx.namespace != self.watched_ns {
                     self.watched_ns = ctx.namespace.clone();

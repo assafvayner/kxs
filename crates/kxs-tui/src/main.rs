@@ -134,6 +134,9 @@ async fn main() -> Result<(), String> {
     terminal::install_panic_hook();
     let _guard = terminal::RestoreGuard;
     terminal::enter().map_err(|e| format!("terminal: {e}"))?;
+    if std::env::var_os("KXS_TUI_DEBUG_PANIC").is_some() {
+        panic!("debug panic: terminal restore check");
+    }
 
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend).map_err(|e| format!("terminal: {e}"))?;

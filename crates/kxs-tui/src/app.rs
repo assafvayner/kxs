@@ -146,6 +146,7 @@ impl App {
 
     /// Execute a `:` command string (used by `--command` and the prompt).
     pub fn exec_command(&mut self, text: &str) -> Vec<Cmd> {
+        let text = text.trim_start_matches(':');
         self.handle_command(text)
     }
 
@@ -299,6 +300,10 @@ impl App {
                 }
                 return vec![];
             }
+            KeyCode::Char('?') => {
+                let view = Box::new(crate::views::help::HelpView::new(self));
+                return self.push_view(view);
+            }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 return self.quit_cmds();
             }
@@ -446,7 +451,7 @@ impl App {
             "theme" => match arg {
                 Some(id) => {
                     self.set_theme(id);
-                    vec![]
+                    vec![Cmd::SaveConfig]
                 }
                 None => {
                     self.chrome.flash(
