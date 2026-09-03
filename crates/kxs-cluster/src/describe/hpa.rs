@@ -1,26 +1,26 @@
 use super::header::write_labels_annotations;
-use super::util::{or_none, rfc1123z};
+use super::util::{or_none, rfc1123z, UNKNOWN, UNSET};
 use super::writer::Writer;
 use k8s_openapi::api::autoscaling::v2::{
     HPAScalingRules, HorizontalPodAutoscaler, MetricSpec, MetricStatus, MetricValueStatus,
 };
 
 fn quantity(value: Option<&k8s_openapi::apimachinery::pkg::api::resource::Quantity>) -> &str {
-    value.map(|value| value.0.as_str()).unwrap_or("<unset>")
+    value.map(|value| value.0.as_str()).unwrap_or(UNSET)
 }
 
 fn current_average(current: Option<&MetricValueStatus>) -> &str {
     current
         .and_then(|current| current.average_value.as_ref())
         .map(|value| value.0.as_str())
-        .unwrap_or("<unknown>")
+        .unwrap_or(UNKNOWN)
 }
 
 fn current_value(current: Option<&MetricValueStatus>) -> &str {
     current
         .and_then(|current| current.value.as_ref())
         .map(|value| value.0.as_str())
-        .unwrap_or("<unknown>")
+        .unwrap_or(UNKNOWN)
 }
 
 fn current_utilization(current: Option<&MetricValueStatus>) -> String {
@@ -30,7 +30,7 @@ fn current_utilization(current: Option<&MetricValueStatus>) -> String {
             average_value: Some(value),
             ..
         }) => format!("{utilization}% ({})", value.0),
-        _ => "<unknown>".into(),
+        _ => UNKNOWN.into(),
     }
 }
 
@@ -232,7 +232,7 @@ pub fn write(w: &mut Writer, hpa: &HorizontalPodAutoscaler) {
     let min_replicas = spec
         .and_then(|spec| spec.min_replicas)
         .map(|replicas| replicas.to_string())
-        .unwrap_or_else(|| "<unset>".into());
+        .unwrap_or_else(|| UNSET.into());
     w.kv(0, "Min replicas", min_replicas);
     w.kv(
         0,
@@ -280,6 +280,7 @@ pub fn write(w: &mut Writer, hpa: &HorizontalPodAutoscaler) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::describe::util::test_support::{block, normalize};
     use serde_json::json;
 
     fn output(value: serde_json::Value) -> String {
@@ -287,36 +288,6 @@ mod tests {
         let mut writer = Writer::new();
         write(&mut writer, &hpa);
         writer.finish()
-    }
-
-    fn normalize(value: &str) -> String {
-        value
-            .lines()
-            .map(|line| {
-                let leading = line.len() - line.trim_start().len();
-                let mut normalized = line[..leading].to_string();
-                let mut spaces = 0;
-                for character in line[leading..].trim_end().chars() {
-                    if character == ' ' {
-                        spaces += 1;
-                        continue;
-                    }
-                    if spaces > 0 {
-                        normalized.push_str(if spaces > 1 { "  " } else { " " });
-                        spaces = 0;
-                    }
-                    normalized.push(character);
-                }
-                normalized
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    fn block<'a>(output: &'a str, start: &str, end: &str) -> &'a str {
-        let start = output.find(start).unwrap();
-        let end = output[start..].find(end).unwrap() + start;
-        &output[start..end]
     }
 
     #[test]
@@ -340,7 +311,7 @@ mod tests {
                 "Metrics:  ( current / target )\n",
                 "Min replicas:  <unset>\n",
                 "Max replicas:  4\n",
-                "Deployment pods:  0 current / 0 desired",
+                "Deployment pods:  0 current / 0 desired\n",
             )
         );
     }

@@ -1,12 +1,13 @@
 use super::header::write_labels_annotations;
-use super::util::{access_modes_short, or_none, rfc1123z, write_list, NONE};
+use super::util::{
+    access_modes_short, or_none, rfc1123z, terminating_status, write_list, NONE, UNKNOWN,
+};
 use super::writer::Writer;
 use k8s_openapi::api::core::v1::{
     PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimCondition, Pod,
     TypedLocalObjectReference,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
-use kxs_core::format::human_duration;
 use std::collections::{BTreeMap, BTreeSet};
 
 const LEGACY_STORAGE_CLASS_ANNOTATION: &str = "volume.beta.kubernetes.io/storage-class";
@@ -31,7 +32,7 @@ pub fn write_pvc(w: &mut Writer, pvc: &PersistentVolumeClaim, pods: &[Pod], now_
     w.kv(
         0,
         "StorageClass",
-        pvc_storage_class(
+        storage_class(
             metadata,
             spec.and_then(|spec| spec.storage_class_name.as_deref()),
         ),
@@ -99,7 +100,7 @@ pub fn write_pv(w: &mut Writer, pv: &PersistentVolume, now_ms: i64) {
     w.kv(
         0,
         "StorageClass",
-        pv_storage_class(
+        storage_class(
             metadata,
             spec.and_then(|spec| spec.storage_class_name.as_deref()),
         ),
@@ -190,7 +191,7 @@ pub fn write_pv(w: &mut Writer, pv: &PersistentVolume, now_ms: i64) {
 
 fn write_source(w: &mut Writer, pv: &PersistentVolume) {
     let Some(spec) = pv.spec.as_ref() else {
-        w.text(1, "<unknown>");
+        w.text(1, UNKNOWN);
         return;
     };
 
@@ -242,21 +243,12 @@ fn write_source(w: &mut Writer, pv: &PersistentVolume) {
     } else {
         // kubectl's broad source switch is intentionally out of scope for the
         // four source kinds supported by this describer.
-        w.text(1, "<unknown>");
+        w.text(1, UNKNOWN);
     }
 }
 
-fn pvc_storage_class<'a>(metadata: &'a ObjectMeta, class: Option<&'a str>) -> &'a str {
-    metadata
-        .annotations
-        .as_ref()
-        .and_then(|annotations| annotations.get(LEGACY_STORAGE_CLASS_ANNOTATION))
-        .map(String::as_str)
-        .or(class)
-        .unwrap_or("")
-}
-
-fn pv_storage_class<'a>(metadata: &'a ObjectMeta, class: Option<&'a str>) -> &'a str {
+/// The legacy annotation wins over `spec.storageClassName` for both PVCs and PVs.
+fn storage_class<'a>(metadata: &'a ObjectMeta, class: Option<&'a str>) -> &'a str {
     metadata
         .annotations
         .as_ref()
@@ -272,8 +264,7 @@ fn phase_with_termination(
     now_ms: i64,
 ) -> String {
     if let Some(deletion_timestamp) = deletion_timestamp {
-        let seconds = (now_ms - deletion_timestamp.0.timestamp_millis()) / 1000;
-        format!("Terminating (lasts {})", human_duration(seconds))
+        terminating_status(deletion_timestamp, now_ms)
     } else {
         phase.unwrap_or("").to_string()
     }
@@ -327,7 +318,7 @@ fn write_conditions(w: &mut Writer, conditions: &[PersistentVolumeClaimCondition
 fn timestamp_or_unknown(timestamp: Option<&Time>) -> String {
     timestamp
         .map(rfc1123z)
-        .unwrap_or_else(|| "<unknown>".to_string())
+        .unwrap_or_else(|| UNKNOWN.to_string())
 }
 
 fn write_data_source(w: &mut Writer, data_source: &TypedLocalObjectReference) {
@@ -428,6 +419,7 @@ fn bounded_attribute(key: &str, value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::describe::util::test_support::{block, normalize};
     use serde_json::{json, Value};
 
     const NOW_MS: i64 = 1_783_080_000_000;
@@ -436,37 +428,8 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
-    fn normalize(value: &str) -> String {
-        let mut output = String::new();
-        for line in value.lines() {
-            let line = line.trim_end();
-            let leading = line.len() - line.trim_start().len();
-            output.push_str(&line[..leading]);
-            let mut spaces = 0;
-            for character in line[leading..].chars() {
-                if character == ' ' {
-                    spaces += 1;
-                    continue;
-                }
-                if spaces > 0 {
-                    output.push_str(if spaces > 1 { "  " } else { " " });
-                    spaces = 0;
-                }
-                output.push(character);
-            }
-            output.push('\n');
-        }
-        output
-    }
-
     fn tail_from<'a>(output: &'a str, start: &str) -> &'a str {
         &output[output.find(start).unwrap()..]
-    }
-
-    fn block<'a>(output: &'a str, start: &str, end: &str) -> &'a str {
-        let start = output.find(start).unwrap();
-        let end = output[start..].find(end).unwrap() + start;
-        &output[start..end]
     }
 
     fn pvc_output(value: Value, pods: &[Pod]) -> String {
@@ -580,14 +543,9 @@ mod tests {
         let metadata: ObjectMeta = from_value(json!({
             "annotations": {"volume.beta.kubernetes.io/storage-class": "legacy"}
         }));
-        assert_eq!(pvc_storage_class(&metadata, Some("current")), "legacy");
-        assert_eq!(pv_storage_class(&metadata, Some("current")), "legacy");
+        assert_eq!(storage_class(&metadata, Some("current")), "legacy");
         assert_eq!(
-            pvc_storage_class(&ObjectMeta::default(), Some("current")),
-            "current"
-        );
-        assert_eq!(
-            pv_storage_class(&ObjectMeta::default(), Some("current")),
+            storage_class(&ObjectMeta::default(), Some("current")),
             "current"
         );
     }

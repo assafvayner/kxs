@@ -1,5 +1,5 @@
 use super::header::write_header;
-use super::util::{or_none, rfc1123z};
+use super::util::{or_none, rfc1123z, UNKNOWN};
 use super::writer::Writer;
 use k8s_openapi::api::core::v1::{LimitRange, Namespace, NamespaceCondition, ResourceQuota};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -111,7 +111,7 @@ fn write_conditions(w: &mut Writer, conditions: &[NamespaceCondition]) {
             .last_transition_time
             .as_ref()
             .map(rfc1123z)
-            .unwrap_or_else(|| "<unknown>".to_string());
+            .unwrap_or_else(|| UNKNOWN.to_string());
         w.cells(
             1,
             &[
@@ -207,33 +207,11 @@ fn quantity_or_dash<'a>(values: &'a Option<BTreeMap<String, Quantity>>, key: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::describe::util::test_support::normalize;
     use serde_json::json;
 
     fn from_value<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> T {
         serde_json::from_value(value).unwrap()
-    }
-
-    fn normalize(value: &str) -> String {
-        let mut output = String::new();
-        for line in value.lines() {
-            let line = line.trim_end();
-            let leading = line.len() - line.trim_start().len();
-            output.push_str(&line[..leading]);
-            let mut spaces = 0;
-            for character in line[leading..].chars() {
-                if character == ' ' {
-                    spaces += 1;
-                    continue;
-                }
-                if spaces > 0 {
-                    output.push_str(if spaces > 1 { "  " } else { " " });
-                    spaces = 0;
-                }
-                output.push(character);
-            }
-            output.push('\n');
-        }
-        output
     }
 
     #[test]
