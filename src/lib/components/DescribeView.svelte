@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type ResourceEvent, type ResourceKind } from "../api";
+  import { api, type ResourceKind } from "../api";
   import type { TabSession } from "../stores/sessions.svelte";
   import HighlightedText from "./HighlightedText.svelte";
   let {
@@ -9,7 +9,6 @@
     resourceKind,
     namespace,
     name,
-    body,
     session,
   }: {
     tabId: number;
@@ -17,16 +16,15 @@
     resourceKind: ResourceKind;
     namespace: string | null;
     name: string;
-    body: string;
     session: TabSession;
   } = $props();
-  let events = $state<ResourceEvent[]>([]);
-  let eventsError = $state<string | null>(null);
+  let body = $state<string | null>(null);
+  let error = $state<string | null>(null);
   onMount(async () => {
     try {
-      events = await api.getResourceEvents(tabId, namespace, resourceKind.kind, name);
+      body = await api.describeResource(tabId, resourceKind, namespace, name);
     } catch (e) {
-      eventsError = String(e);
+      error = String(e);
     }
   });
 </script>
@@ -34,22 +32,8 @@
 <div class="detail">
   <div class="detail-bar"><span class="mono">{title}</span></div>
   <div class="detail-body">
-    <HighlightedText {body} query={session.filter} />
-    <h3 class="events-h">Events</h3>
-    {#if eventsError}<div class="dim">events unavailable: {eventsError}</div>
-    {:else if events.length === 0}<div class="dim">No events.</div>
-    {:else}
-      <table class="events">
-        <thead><tr><th>Type</th><th>Reason</th><th>Count</th><th>Message</th></tr></thead>
-        <tbody>
-          {#each events as ev}
-            <tr>
-              <td class:st-bad={ev.type === "Warning"}>{ev.type}</td>
-              <td>{ev.reason}</td><td>{ev.count}</td><td>{ev.message}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
+    {#if error}<div class="error">{error}</div>
+    {:else if body === null}<div class="dim">Loading…</div>
+    {:else}<HighlightedText {body} query={session.filter} />{/if}
   </div>
 </div>

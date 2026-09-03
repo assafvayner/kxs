@@ -5,7 +5,7 @@ export type View =
   | { kind: "resource"; resourceKind: ResourceKind }
   | { kind: "yaml"; title: string; body: string }
   | { kind: "yamlEdit"; title: string; body: string; resourceKind: ResourceKind; namespace: string | null; name: string }
-  | { kind: "describe"; title: string; resourceKind: ResourceKind; namespace: string | null; name: string; body: string }
+  | { kind: "describe"; title: string; resourceKind: ResourceKind; namespace: string | null; name: string }
   | { kind: "logs"; namespace: string; pods: string[]; label: string }
   | { kind: "exec"; namespace: string; pod: string; container: string | null }
   | { kind: "forwards" }

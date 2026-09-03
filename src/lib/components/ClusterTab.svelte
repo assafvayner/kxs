@@ -371,20 +371,19 @@
     const sel = parseSelected();
     if (!sel) return;
     const k = currentKind();
+    if (kind === "describe") {
+      pushView({
+        kind: "describe",
+        title: `${k.kind} ${sel.name}`,
+        resourceKind: k,
+        namespace: sel.namespace,
+        name: sel.name,
+      });
+      return;
+    }
     try {
       const body = await api.getResourceYaml(tabId, k, sel.namespace, sel.name);
-      if (kind === "yaml") {
-        pushView({ kind: "yaml", title: `${k.kind} ${sel.name}`, body });
-      } else {
-        pushView({
-          kind: "describe",
-          title: `${k.kind} ${sel.name}`,
-          resourceKind: k,
-          namespace: sel.namespace,
-          name: sel.name,
-          body,
-        });
-      }
+      pushView({ kind: "yaml", title: `${k.kind} ${sel.name}`, body });
     } catch {
       /* selection may be stale; ignore */
     }
@@ -936,7 +935,6 @@
         resourceKind={s.views.top.resourceKind}
         namespace={s.views.top.namespace}
         name={s.views.top.name}
-        body={s.views.top.body}
         session={s} />
     {:else if s.views.top.kind === "logs"}
       {#key s.views.top}
