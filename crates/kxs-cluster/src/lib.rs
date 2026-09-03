@@ -11,4 +11,5 @@ pub mod quantity;
 pub mod resources;
 pub mod schema;
 pub mod session;
+pub mod table;
 pub mod workloads;
