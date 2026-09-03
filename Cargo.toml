@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/kxs-core", "crates/kxs-cluster", "src-tauri"]
+default-members = ["crates/kxs-core", "crates/kxs-cluster"]
 
 [profile.release]
 strip = true

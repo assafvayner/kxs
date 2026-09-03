@@ -2074,21 +2074,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kxs"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "kxs-cluster",
- "kxs-core",
- "notify",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tokio",
-]
-
-[[package]]
 name = "kxs-cluster"
 version = "0.1.0"
 dependencies = [
@@ -2116,6 +2101,21 @@ dependencies = [
  "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kxs-desktop"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "kxs-cluster",
+ "kxs-core",
+ "notify",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tokio",
 ]
 
 [[package]]
