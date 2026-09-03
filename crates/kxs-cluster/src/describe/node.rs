@@ -745,7 +745,7 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
 mod tests {
     use super::*;
     use k8s_openapi::api::core::v1::{
-        NodeSpec, NodeStatus, PodCondition, PodSpec, PodStatus, ResourceRequirements,
+        NodeCondition, NodeSpec, NodeStatus, PodCondition, PodSpec, PodStatus, ResourceRequirements,
     };
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
@@ -1096,6 +1096,76 @@ mod tests {
         assert!(output.contains("Addresses:\n"));
         assert!(output.contains("System Info:\n"));
         assert!(output.contains("Machine ID:"));
+    }
+
+    /// Exact bytes, so the column widths of the three node tables are pinned.
+    #[test]
+    fn node_tables_are_column_aligned() {
+        let pod = Pod {
+            metadata: ObjectMeta {
+                name: Some("web-1".to_string()),
+                namespace: Some("default".to_string()),
+                creation_timestamp: Some(Time("2026-07-01T00:00:00Z".parse().unwrap())),
+                ..Default::default()
+            },
+            spec: Some(PodSpec {
+                containers: vec![container(
+                    "web",
+                    &[("cpu", "100m"), ("memory", "64Mi")],
+                    &[("cpu", "500m"), ("memory", "128Mi")],
+                )],
+                ..Default::default()
+            }),
+            status: Some(PodStatus {
+                phase: Some("Running".to_string()),
+                ..Default::default()
+            }),
+        };
+        let node = Node {
+            status: Some(NodeStatus {
+                allocatable: Some(quantities(&[("cpu", "2"), ("memory", "1Gi")])),
+                conditions: Some(vec![NodeCondition {
+                    type_: "Ready".to_string(),
+                    status: "True".to_string(),
+                    last_heartbeat_time: Some(Time("2026-07-03T11:59:00Z".parse().unwrap())),
+                    last_transition_time: Some(Time("2026-07-01T00:00:00Z".parse().unwrap())),
+                    reason: Some("KubeletReady".to_string()),
+                    message: Some("kubelet is posting ready status".to_string()),
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut w = Writer::new();
+        write(&mut w, &node, None, &[pod], 1_783_080_000_000);
+        let output = w.finish();
+
+        assert!(output.contains(concat!(
+            "Conditions:\n",
+            "  Type   Status  LastHeartbeatTime                LastTransitionTime               Reason        Message\n",
+            "  ----   ------  -----------------                ------------------               ------        -------\n",
+            "  Ready  True    Fri, 03 Jul 2026 11:59:00 +0000  Wed, 01 Jul 2026 00:00:00 +0000  KubeletReady  kubelet is posting ready status\n",
+        )), "conditions table:\n{output}");
+        // The System Info entries share the block, so column 0 is as wide as
+        // `  Container Runtime Version:` — exactly what kubectl prints.
+        assert!(output.contains(concat!(
+            "Non-terminated Pods:          (1 in total)\n",
+            "  Namespace                   Name   CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age\n",
+            "  ---------                   ----   ------------  ----------  ---------------  -------------  ---\n",
+            "  default                     web-1  100m (5%)     500m (25%)  64Mi (6%)        128Mi (12%)    2d12h\n",
+        )), "pod table:\n{output}");
+        assert!(
+            output.contains(concat!(
+                "Allocated resources:\n",
+                "  (Total limits may be over 100 percent, i.e., overcommitted.)\n",
+                "  Resource           Requests   Limits\n",
+                "  --------           --------   ------\n",
+                "  cpu                100m (5%)  500m (25%)\n",
+                "  memory             64Mi (6%)  128Mi (12%)\n",
+                "  ephemeral-storage  0 (0%)     0 (0%)\n",
+            )),
+            "allocated resources table:\n{output}"
+        );
     }
 
     #[test]

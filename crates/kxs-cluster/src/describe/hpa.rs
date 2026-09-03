@@ -526,6 +526,47 @@ mod tests {
         );
     }
 
+    /// Exact bytes, so the Conditions column widths are pinned.
+    #[test]
+    fn conditions_table_is_column_aligned() {
+        let output = output(json!({
+            "metadata": {"name": "web", "namespace": "default"},
+            "spec": {
+                "scaleTargetRef": {"apiVersion": "apps/v1", "kind": "Deployment", "name": "web"},
+                "maxReplicas": 4
+            },
+            "status": {
+                "currentReplicas": 2,
+                "desiredReplicas": 2,
+                "conditions": [
+                    {
+                        "type": "AbleToScale",
+                        "status": "True",
+                        "reason": "ReadyForNewScale",
+                        "message": "recommended size matches current size"
+                    },
+                    {
+                        "type": "ScalingLimited",
+                        "status": "False",
+                        "reason": "DesiredWithinRange",
+                        "message": "the desired count is within the acceptable range"
+                    }
+                ]
+            }
+        }));
+
+        assert!(
+            output.contains(concat!(
+                "Conditions:\n",
+                "  Type            Status  Reason              Message\n",
+                "  ----            ------  ------              -------\n",
+                "  AbleToScale     True    ReadyForNewScale    recommended size matches current size\n",
+                "  ScalingLimited  False   DesiredWithinRange  the desired count is within the acceptable range\n",
+            )),
+            "conditions table:\n{output}"
+        );
+    }
+
     #[test]
     fn behavior_uses_literal_lines_policy_columns_and_default_select_policy() {
         let output = output(json!({

@@ -3,6 +3,15 @@
 /// more cells form a block, and within a block every cell except a line's
 /// last is padded to the widest cell in its column plus two spaces. Lines
 /// with a single cell are emitted verbatim and end the block.
+///
+/// Go's tabwriter narrows a column recursively: within a block it only
+/// considers lines that actually reach that column, so a run of two-cell lines
+/// interrupting three-cell lines forms its own sub-block for column 0. This
+/// implementation instead measures each column over the whole run of lines with
+/// two or more cells. The two agree wherever kubectl keeps a block uniform,
+/// which is every table it prints; they differ only in the width of the first
+/// column when cell counts vary mid-block, and there the wider column is still
+/// aligned and readable — the describe output is read, not parsed.
 #[derive(Debug, Default)]
 pub struct Writer {
     lines: Vec<Line>,
@@ -198,6 +207,35 @@ mod tests {
         w.text(0, "====");
         w.kv(0, "k", "");
         assert_eq!(w.finish(), "\nData\n====\nk:\n");
+    }
+
+    /// Pins the divergence from Go's per-column recursion described above: the
+    /// plain `kv` line in the middle widens column 0 for the whole block.
+    #[test]
+    fn interleaved_cell_counts_share_one_column_width() {
+        let mut w = Writer::new();
+        w.section(0, "Environment");
+        w.cells(
+            1,
+            &[
+                "TOKEN:",
+                "<set to the key 'token' in secret 's'>",
+                "Optional: false",
+            ],
+        );
+        w.kv(1, "MODE", "prod");
+        w.cells(
+            1,
+            &[
+                "PASSWORD:",
+                "<set to the key 'pw' in secret 's'>",
+                "Optional: true",
+            ],
+        );
+        assert_eq!(
+            w.finish(),
+            "Environment:\n  TOKEN:     <set to the key 'token' in secret 's'>  Optional: false\n  MODE:      prod\n  PASSWORD:  <set to the key 'pw' in secret 's'>     Optional: true\n"
+        );
     }
 
     #[test]

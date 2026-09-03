@@ -16,9 +16,13 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{MicroTime, ObjectMeta, Time
 use k8s_openapi::chrono::{DateTime, Utc};
 use kxs_cluster::describe::{describe_value, Lookups, ServiceAccountSecretLookup};
 use kxs_cluster::discovery::ResourceKind;
+use kxs_cluster::resources::ResourceEvent;
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
+
+mod common;
+use common::normalize;
 
 fn now() -> DateTime<Utc> {
     "2026-07-03T12:00:00Z".parse().unwrap()
@@ -35,39 +39,25 @@ fn kind(group: &str, version: &str, kind: &str, plural: &str, namespaced: bool) 
     }
 }
 
-fn normalize(s: &str) -> String {
-    let mut out = String::new();
-    for line in s.lines() {
-        let line = line.trim_end();
-        let lead = line.len() - line.trim_start().len();
-        out.push_str(&line[..lead]);
-        let mut run = 0;
-        for ch in line[lead..].chars() {
-            if ch == ' ' {
-                run += 1;
-                continue;
-            }
-            if run > 0 {
-                out.push_str(if run >= 2 { "  " } else { " " });
-                run = 0;
-            }
-            out.push(ch);
-        }
-        out.push('\n');
-    }
-    out
-}
-
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/describe")
 }
 
 fn golden(name: &str, kind: &ResourceKind, lookups: &Lookups) {
+    golden_with_events(name, kind, lookups, &[]);
+}
+
+fn golden_with_events(
+    name: &str,
+    kind: &ResourceKind,
+    lookups: &Lookups,
+    events: &[ResourceEvent],
+) {
     let dir = fixtures();
     let raw = fs::read_to_string(dir.join(format!("{name}.json")))
         .unwrap_or_else(|e| panic!("read {name}.json: {e}"));
     let value: Value = serde_json::from_str(&raw).unwrap();
-    let actual = normalize(&describe_value(kind, &value, lookups, &[], now()));
+    let actual = normalize(&describe_value(kind, &value, lookups, events, now()));
     let path = dir.join(format!("{name}.txt"));
     if std::env::var_os("UPDATE_GOLDENS").is_some() {
         fs::write(&path, &actual).unwrap();
@@ -187,10 +177,31 @@ fn service_with_endpoints() {
         endpoints: Some(endpoints),
         ..Default::default()
     };
-    golden(
+    let events = vec![
+        ResourceEvent {
+            type_: "Warning".into(),
+            reason: "FailedToUpdateEndpoint".into(),
+            message: "Failed to update endpoint default/web".into(),
+            count: 3,
+            last_seen: Some("2026-07-03T11:58:00Z".into()),
+            first_seen: Some("2026-07-03T11:50:00Z".into()),
+            source: "endpoint-controller".into(),
+        },
+        ResourceEvent {
+            type_: "Normal".into(),
+            reason: "UpdatedLoadBalancer".into(),
+            message: "Updated load balancer with new hosts".into(),
+            count: 1,
+            last_seen: Some("2026-07-03T11:55:00Z".into()),
+            first_seen: None,
+            source: "service-controller".into(),
+        },
+    ];
+    golden_with_events(
         "service",
         &kind("", "v1", "Service", "services", true),
         &lookups,
+        &events,
     );
 }
 

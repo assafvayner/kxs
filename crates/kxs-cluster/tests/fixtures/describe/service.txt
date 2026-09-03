@@ -13,4 +13,8 @@ TargetPort:  8080/TCP
 Endpoints:  10.0.1.4:8080,10.0.1.5:8080
 Session Affinity:  None
 Internal Traffic Policy:  Cluster
-Events:  <none>
+Events:
+  Type  Reason  Age  From  Message
+  ----  ------  ----  ----  -------
+  Normal  UpdatedLoadBalancer  5m  service-controller  Updated load balancer with new hosts
+  Warning  FailedToUpdateEndpoint  2m (x3 over 10m)  endpoint-controller  Failed to update endpoint default/web
