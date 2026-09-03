@@ -178,11 +178,15 @@ impl App {
             .open_pick(format!("Exec({ns}/{pod})"), options, view);
     }
 
-    /// Live theme preview (ThemePicker `j/k`).
+    /// Live theme preview (ThemePicker `j/k`). Enter keeps it (SaveConfig
+    /// serializes this), Esc previews the original id again.
     pub fn preview_theme(&mut self, id: &str) {
         let th = crate::theme::get(id);
         if th.id == id {
             self.theme = th;
+            if let Ok(mut cfg) = self.config.lock() {
+                cfg.theme = Some(id.to_string());
+            }
         }
     }
 
@@ -811,11 +815,8 @@ impl App {
                     vec![Cmd::SaveConfig]
                 }
                 None => {
-                    self.chrome.flash(
-                        "usage: :theme <id> (picker arrives in a later phase)",
-                        false,
-                    );
-                    vec![]
+                    let view = Box::new(crate::views::theme_picker::ThemePicker::new(self));
+                    self.push_view(view)
                 }
             },
             "events" | "ev" => {
@@ -871,7 +872,7 @@ impl App {
         }
         vec![Cmd::Fetch {
             view,
-            what: crate::cmd::Fetch::ExecTargets {
+            what: crate::cmd::Fetch::ForwardPorts {
                 ns: t.ns.clone().unwrap_or_default(),
                 pod: t.name.clone(),
             },
@@ -906,7 +907,7 @@ impl App {
         }
         vec![Cmd::Fetch {
             view,
-            what: crate::cmd::Fetch::ForwardPorts {
+            what: crate::cmd::Fetch::ExecTargets {
                 ns: t.ns.clone().unwrap_or_default(),
                 pod: t.name.clone(),
             },

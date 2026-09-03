@@ -153,7 +153,9 @@ impl ResourcesView {
     fn target_of(&self, r: &ResourceRow) -> crate::view::Target {
         crate::view::Target {
             kind: self.kind.clone(),
-            ns: self.watched_ns.clone(),
+            // the row's own namespace, not the watched one: in an "all
+            // namespaces" view the selected row still lives in a specific ns
+            ns: r.namespace.clone().or_else(|| self.watched_ns.clone()),
             name: r.name.clone(),
             container: None,
             // READY "2/2" → desired replicas 2 (deployment-style rows)
@@ -378,7 +380,11 @@ impl View for ResourcesView {
                 }]
             }
             crate::msg::Msg::Picked { choice, .. } => {
-                let Some(choice) = choice else { return vec![] };
+                let Some(choice) = choice else {
+                    self.pending_exec = false;
+                    self.pending_pf = false;
+                    return vec![];
+                };
                 if self.pending_exec {
                     self.pending_exec = false;
                     vec![Cmd::Suspend(crate::cmd::SuspendAction::Exec {

@@ -32,6 +32,10 @@ pub fn restore() {
 pub fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // restore() is gated on the alt screen, but a panic during an exec
+        // suspension (alt screen already left, raw mode on) must still
+        // disable raw mode or the tty is left unusable.
+        let _ = disable_raw_mode();
         restore();
         default_hook(info);
     }));

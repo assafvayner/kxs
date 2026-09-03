@@ -88,7 +88,8 @@ impl View for ValuesView {
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             KeyCode::Char('x') => self.masked = !self.masked,
             KeyCode::Char('c') => {
-                if let Some(e) = self.current() {
+                // masked secrets never leave via copy; reveal first (x)
+                if let Some(e) = self.current().filter(|_| !self.masked) {
                     clipboard::copy(&e.value);
                 }
             }
@@ -114,7 +115,7 @@ impl View for ValuesView {
                     },
                 }]
             }
-            crate::msg::Msg::Fetched { result, .. } => {
+            crate::msg::Msg::Fetched { view, result } if *view == self.id => {
                 self.pending = false;
                 match result {
                     Ok(crate::cmd::FetchResult::Values(entries)) => self.entries = entries.clone(),

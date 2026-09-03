@@ -9,6 +9,8 @@ use ratatui::crossterm;
 
 use crate::cmd::Mutation;
 use kxs_cluster::discovery::ResourceKind;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Dispatch a mutation to its kxs-cluster call. `Ok(Some(text))` surfaces a
 /// flash message (e.g. the created Job name).
@@ -170,27 +172,55 @@ pub async fn run_exec(
             false
         }
     };
-    let handle =
-        kxs_cluster::exec::exec(client, ns, pod, container, command, cols, rows, send).await?;
-
-    // stdin pump: raw bytes from the real terminal
-    let stdin_tx = handle.stdin.clone();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 1024];
-        let mut input = std::io::stdin();
-        use std::io::Read as _;
-        loop {
-            match input.read(&mut buf) {
-                Ok(0) => break, // local EOF
-                Ok(n) => {
-                    if stdin_tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
+    let handle = match kxs_cluster::exec::exec(
+        client, ns, pod, container, command, cols, rows, send,
+    )
+    .await
+    {
+        Ok(h) => h,
+        // do not leave raw mode enabled on the error path
+        Err(e) => {
+            crossterm::terminal::disable_raw_mode().ok();
+            return Err(e);
         }
-    });
+    };
+    // stdin pump: raw bytes from the real terminal. poll()-based with a
+    // stop flag so it can actually exit when the session ends — a plain
+    // blocking read would linger, eat the next keys whole, and hold the tty
+    // in a blocked read across the terminal-mode switches that follow.
+    let stdin_tx = handle.stdin.clone();
+    let stdin_stop = Arc::new(AtomicBool::new(false));
+    let stdin_done = Arc::new(AtomicBool::new(false));
+    {
+        let stop = stdin_stop.clone();
+        let done = stdin_done.clone();
+        std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut buf = [0u8; 1024];
+            let mut input = std::io::stdin();
+            while !stop.load(Ordering::SeqCst) {
+                let mut fds = [libc::pollfd {
+                    fd: 0,
+                    events: libc::POLLIN,
+                    revents: 0,
+                }];
+                let rc = unsafe { libc::poll(fds.as_mut_ptr(), 1, 100) };
+                if rc <= 0 {
+                    continue;
+                }
+                match input.read(&mut buf) {
+                    Ok(0) => break, // local EOF
+                    Ok(n) => {
+                        if stdin_tx.send(buf[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            done.store(true, Ordering::SeqCst);
+        });
+    }
 
     // SIGWINCH-ish: poll the terminal size and resize the remote pty
     let resize_tx = handle.resize.clone();
@@ -198,12 +228,23 @@ pub async fn run_exec(
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             if let Ok((w, h)) = crossterm::terminal::size() {
-                let _ = resize_tx.send((w, h));
+                if resize_tx.send((w, h)).is_err() {
+                    break;
+                }
             }
         }
     });
 
     let message = close_rx.recv().await.unwrap_or(None);
+    // stop the stdin pump and wait until it is out of read(2), so it can
+    // neither eat the TUI's next keys nor race the terminal-mode switches
+    stdin_stop.store(true, Ordering::SeqCst);
+    for _ in 0..50 {
+        if stdin_done.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     // restore: leave raw mode (the TUI re-enters via terminal::enter)
     crossterm::terminal::disable_raw_mode().ok();
     Ok(message)

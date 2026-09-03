@@ -77,12 +77,19 @@ pub async fn exec(
     // stdout pump -> send (base64)
     let send = std::sync::Arc::new(send);
     let send_out = send.clone();
+    // EOF on stdout is the reliable "remote shell exited" signal: the kubelet
+    // closes the stream when the command exits, and the status future may not
+    // resolve on a plain connection close, so surface Closed from here.
+    let send_end = send.clone();
     let sink_closed_pump = sink_closed.clone();
     tokio::spawn(async move {
         let mut buf = [0u8; 8192];
         loop {
             match out.read(&mut buf).await {
-                Ok(0) => break,
+                Ok(0) => {
+                    let _ = send_end(ExecEvent::Closed { message: None });
+                    break;
+                }
                 Ok(n) => {
                     let data = BASE64.encode(&buf[..n]);
                     if !send_out(ExecEvent::Output { data }) {
@@ -90,7 +97,10 @@ pub async fn exec(
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(_) => {
+                    let _ = send_end(ExecEvent::Closed { message: None });
+                    break;
+                }
             }
         }
     });

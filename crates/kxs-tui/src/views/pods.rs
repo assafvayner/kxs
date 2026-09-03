@@ -57,6 +57,8 @@ pub struct PodsView {
     pending_exec: bool,
     pending_pf: bool,
     pf_ns_pod: (String, String),
+    /// Pod keys ("ns/name") with a live forward, for the PF column.
+    forwarded: std::collections::HashSet<String>,
     status: Option<String>,
     viewport_rows: Cell<u16>,
 }
@@ -94,6 +96,7 @@ impl PodsView {
             pending_exec: false,
             pending_pf: false,
             pf_ns_pod: (String::new(), String::new()),
+            forwarded: Default::default(),
             status: None,
             viewport_rows: Cell::new(20),
         }
@@ -154,7 +157,12 @@ impl PodsView {
             cells.push(p.namespace.clone());
         }
         cells.push(p.name.clone());
-        cells.push(String::new()); // PF, filled by render from the forwards registry
+        let pf = if self.forwarded.contains(&p.key) {
+            "\u{25cf}"
+        } else {
+            ""
+        };
+        cells.push(pf.to_string()); // PF column: dot when a forward is live
         cells.push(p.ready.clone());
         cells.push(p.status.clone());
         cells.push(p.restarts.to_string());
@@ -410,6 +418,7 @@ impl View for PodsView {
     fn on_msg(&mut self, msg: &crate::msg::Msg, ctx: &AppCtx) -> Vec<Cmd> {
         match msg {
             crate::msg::Msg::Tick => {
+                self.forwarded = ctx.forwards.iter().cloned().collect();
                 if self.selector_pending {
                     return vec![];
                 }
@@ -546,7 +555,11 @@ impl View for PodsView {
                 }]
             }
             crate::msg::Msg::Picked { choice, .. } => {
-                let Some(choice) = choice else { return vec![] };
+                let Some(choice) = choice else {
+                    self.pending_exec = false;
+                    self.pending_pf = false;
+                    return vec![];
+                };
                 if self.pending_exec {
                     self.pending_exec = false;
                     vec![Cmd::Suspend(crate::cmd::SuspendAction::Exec {

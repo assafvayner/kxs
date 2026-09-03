@@ -3,9 +3,10 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures::StreamExt;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{Event, EventStream};
+use ratatui::crossterm::event::{self, Event};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
@@ -159,6 +160,14 @@ pub struct Runtime {
     sessions: Shared,
     config: Arc<Mutex<Config>>,
     metrics_poller: Option<tokio::task::JoinHandle<()>>,
+    /// Terminal event pump: one dedicated reader thread for the whole
+    /// process lifetime. While a suspended child (exec) owns the terminal
+    /// the thread is parked — it makes no tty syscalls, so it cannot steal
+    /// the child's keystrokes, and no stale crossterm reader lingers to
+    /// fight the next one over the tty.
+    pump_pause: Arc<AtomicBool>,
+    pump_parked: Arc<AtomicBool>,
+    pump_started: Arc<AtomicBool>,
 }
 
 impl Runtime {
@@ -172,25 +181,69 @@ impl Runtime {
             sessions,
             config,
             metrics_poller: None,
+            pump_pause: Arc::new(AtomicBool::new(false)),
+            pump_parked: Arc::new(AtomicBool::new(false)),
+            pump_started: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Pump terminal events into the message channel.
-    fn spawn_event_pump(&self) {
+    /// (Re)activate the event pump. Spawns the single reader thread once;
+    /// later calls just unpark it after a suspend round-trip.
+    fn start_event_pump(&mut self) {
+        if self.pump_started.swap(false, Ordering::SeqCst) {
+            // thread already exists: unpark it
+            self.pump_started.store(true, Ordering::SeqCst);
+            self.pump_pause.store(false, Ordering::SeqCst);
+            return;
+        }
+        self.pump_started.store(true, Ordering::SeqCst);
         let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let mut reader = EventStream::new();
-            while let Some(Ok(ev)) = reader.next().await {
-                let msg = match ev {
-                    Event::Key(k) => Msg::Key(k),
-                    Event::Resize(w, h) => Msg::Resize(w, h),
-                    _ => continue,
-                };
-                if tx.send(msg).is_err() {
-                    break;
+        let pause = self.pump_pause.clone();
+        let parked = self.pump_parked.clone();
+        pause.store(false, Ordering::SeqCst);
+        std::thread::spawn(move || loop {
+            if pause.load(Ordering::SeqCst) {
+                parked.store(true, Ordering::SeqCst);
+                while pause.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(10));
                 }
+                parked.store(false, Ordering::SeqCst);
+                continue;
+            }
+            match event::poll(Duration::from_millis(50)) {
+                Ok(true) => match event::read() {
+                    Ok(Event::Key(k)) => {
+                        if tx.send(Msg::Key(k)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(Event::Resize(w, h)) => {
+                        let _ = tx.send(Msg::Resize(w, h));
+                    }
+                    Ok(_) => {}
+                    Err(_) => break,
+                },
+                Ok(false) => {}
+                Err(_) => break,
             }
         });
+    }
+
+    /// Park the pump thread: no tty reads while a suspended child (exec)
+    /// owns the terminal, so the child's keystrokes are never stolen and no
+    /// stale reader lingers to fight the next one over the tty. Waits
+    /// (bounded) until the thread has actually parked.
+    fn stop_event_pump(&mut self) {
+        if !self.pump_started.load(Ordering::SeqCst) {
+            return;
+        }
+        self.pump_pause.store(true, Ordering::SeqCst);
+        for _ in 0..50 {
+            if self.pump_parked.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     /// Runs until `Cmd::Quit` or the message channel closes. The terminal is
@@ -202,7 +255,7 @@ impl Runtime {
         screen: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
         pre_cmds: Vec<Cmd>,
     ) -> Result<(), String> {
-        self.spawn_event_pump();
+        self.start_event_pump();
         for cmd in pre_cmds {
             if self.execute(cmd, app).await? {
                 return Ok(());
@@ -224,6 +277,8 @@ impl Runtime {
                 if let Cmd::Suspend(action) = cmd {
                     // handled inline: leave raw mode, run on the real
                     // terminal, restore, force a full redraw
+                    // stop consuming the terminal: the child owns it now
+                    self.stop_event_pump();
                     terminal::restore();
                     let client = {
                         let s = self.sessions.lock().expect("sessions lock");
@@ -251,6 +306,21 @@ impl Runtime {
                         None => Err("not connected".into()),
                     };
                     terminal::enter().ok();
+                    // Restart the pump thread, then discard anything it
+                    // (or the kernel tty buffer) picked up during the
+                    // suspend window so none of it replays into the TUI.
+                    self.start_event_pump();
+                    while crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                        let _ = crossterm::event::read();
+                    }
+                    while let Ok(m) = rx.try_recv() {
+                        if matches!(m, Msg::Key(_)) {
+                            continue;
+                        }
+                        for c in app.update(m) {
+                            let _ = self.execute(c, app).await;
+                        }
+                    }
                     let _ = crate::terminal::clear_frame(screen);
                     match result {
                         Ok(Some(text)) => app.chrome.flash(text, false),

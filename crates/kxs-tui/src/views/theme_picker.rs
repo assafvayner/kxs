@@ -61,6 +61,9 @@ impl View for ThemePicker {
             KeyCode::End | KeyCode::Char('G') => self.selected = last,
             KeyCode::Enter => {
                 if let Some(t) = self.themes.get(self.selected) {
+                    // re-anchor: a later Esc must revert to the applied
+                    // theme, not the pre-picker one (disk already has it)
+                    self.original = t.id.clone();
                     cmds.push(Cmd::PreviewTheme { id: t.id.clone() });
                     cmds.push(Cmd::SaveConfig);
                 }
