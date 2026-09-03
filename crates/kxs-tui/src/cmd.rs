@@ -50,6 +50,26 @@ pub enum Fetch {
         ns: String,
         name: String,
     },
+    ConfigValues {
+        ns: String,
+        name: String,
+        kind: String,
+    },
+    ServiceEndpoint {
+        ns: String,
+        name: String,
+        port: u16,
+    },
+    /// Containers of a pod, fetched to resolve an exec target.
+    ExecTargets {
+        ns: String,
+        pod: String,
+    },
+    /// Container port choices of a pod, fetched to open a forward.
+    ForwardPorts {
+        ns: String,
+        pod: String,
+    },
 }
 
 /// A cluster mutation; the runtime dispatches to the matching kxs-cluster call.
@@ -107,6 +127,12 @@ pub enum SuspendAction {
         ns: Option<String>,
         name: String,
     },
+    /// `s`: shell into the pod/container on the real terminal.
+    Exec {
+        ns: String,
+        pod: String,
+        container: Option<String>,
+    },
 }
 
 /// Result payloads for `Cmd::Fetch`.
@@ -121,6 +147,19 @@ pub enum FetchResult {
     /// Result of the container picker modal.
     ContainerPicked(String),
     Rollout(Vec<kxs_cluster::workloads::RolloutRevision>),
+    Values(Vec<kxs_cluster::workloads::ConfigEntry>),
+    /// Resolved (pod, containerPort) behind a Service.
+    Endpoint(String, u16),
+    ExecContainers {
+        ns: String,
+        pod: String,
+        infos: Vec<kxs_cluster::pods::ContainerInfo>,
+    },
+    ForwardPorts {
+        ns: String,
+        pod: String,
+        choices: Vec<kxs_cluster::containers::PortChoice>,
+    },
 }
 
 /// Side effects. The runtime turns each variant into a tokio task that calls
@@ -151,6 +190,26 @@ pub enum Cmd {
     },
     /// Leave the TUI, run the action on the real terminal, come back.
     Suspend(SuspendAction),
+    StartForward {
+        view: ViewId,
+        ns: String,
+        pod: String,
+        port: u16,
+    },
+    StopForward {
+        id: u64,
+    },
+    /// Open the exec-container picker; the choice routes back as `Msg::Picked`.
+    PickExec {
+        view: ViewId,
+        ns: String,
+        pod: String,
+        options: Vec<(String, String)>,
+    },
+    /// Live theme preview from the ThemePicker.
+    PreviewTheme {
+        id: String,
+    },
     /// Repeating metrics poll for the header and the Metrics view.
     PollMetrics {
         view: ViewId,

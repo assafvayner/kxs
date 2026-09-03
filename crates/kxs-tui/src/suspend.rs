@@ -5,8 +5,10 @@ use kxs_cluster::edit::{
     apply_edit, cordon_patch, delete_resource, merge_patch, restart_patch, scale_patch,
     suspend_patch,
 };
+use ratatui::crossterm;
 
-use crate::cmd::{Mutation, SuspendAction};
+use crate::cmd::Mutation;
+use kxs_cluster::discovery::ResourceKind;
 
 /// Dispatch a mutation to its kxs-cluster call. `Ok(Some(text))` surfaces a
 /// flash message (e.g. the created Job name).
@@ -132,15 +134,91 @@ pub async fn mutate(client: kube::Client, m: Mutation) -> Result<Option<String>,
     }
 }
 
+/// The `s` exec flow, run with the TUI suspended: the remote shell gets the
+/// real terminal in raw mode; output is decoded from base64; Ctrl-D / exit
+/// restores the TUI. `Ok(Some(text))` is the session's close message.
+pub async fn run_exec(
+    client: kube::Client,
+    ns: &str,
+    pod: &str,
+    container: Option<&str>,
+    cols: u16,
+    rows: u16,
+) -> Result<Option<String>, String> {
+    use base64::Engine;
+    use std::io::Write;
+
+    // re-raw the terminal ourselves: the remote shell needs raw input
+    crossterm::terminal::enable_raw_mode().map_err(|e| e.to_string())?;
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "command -v bash >/dev/null && exec bash || exec sh".to_string(),
+    ];
+    let (close_tx, mut close_rx) = tokio::sync::mpsc::unbounded_channel::<Option<String>>();
+    let send = move |ev: kxs_cluster::exec::ExecEvent| match ev {
+        kxs_cluster::exec::ExecEvent::Output { data } => {
+            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&data) {
+                let mut out = std::io::stdout();
+                let _ = out.write_all(&bytes);
+                let _ = out.flush();
+            }
+            true
+        }
+        kxs_cluster::exec::ExecEvent::Closed { message } => {
+            let _ = close_tx.send(message);
+            false
+        }
+    };
+    let handle =
+        kxs_cluster::exec::exec(client, ns, pod, container, command, cols, rows, send).await?;
+
+    // stdin pump: raw bytes from the real terminal
+    let stdin_tx = handle.stdin.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        let mut input = std::io::stdin();
+        use std::io::Read as _;
+        loop {
+            match input.read(&mut buf) {
+                Ok(0) => break, // local EOF
+                Ok(n) => {
+                    if stdin_tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // SIGWINCH-ish: poll the terminal size and resize the remote pty
+    let resize_tx = handle.resize.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            if let Ok((w, h)) = crossterm::terminal::size() {
+                let _ = resize_tx.send((w, h));
+            }
+        }
+    });
+
+    let message = close_rx.recv().await.unwrap_or(None);
+    // restore: leave raw mode (the TUI re-enters via terminal::enter)
+    crossterm::terminal::disable_raw_mode().ok();
+    Ok(message)
+}
+
 /// The `e` edit flow, run with the TUI suspended: fetch YAML, write a temp
 /// file, hand it to $KUBE_EDITOR/$EDITOR/vi, apply on save. Server errors are
 /// prepended as `# ` comments and the editor reopens (kubectl behavior).
 /// `Ok(None)` means "no changes".
 pub async fn run_edit(
     client: kube::Client,
-    action: SuspendAction,
+    kind: ResourceKind,
+    ns: Option<String>,
+    name: String,
 ) -> Result<Option<String>, String> {
-    let SuspendAction::Edit { kind, ns, name } = action;
     let yaml = kxs_cluster::resources::get_yaml(
         client.clone(),
         &kind.group,

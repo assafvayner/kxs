@@ -26,6 +26,8 @@ impl Default for Sessions {
             kinds: Default::default(),
             present: Default::default(),
             active: None,
+            forwards: Default::default(),
+            next_forward_id: 0,
         }
     }
 }
@@ -39,14 +41,60 @@ pub struct Sessions {
     /// refreshed every 5 minutes.
     pub present: HashMap<String, Arc<HashSet<String>>>,
     pub active: Option<ActiveContext>,
+    /// Port-forwards, owned by the session (not by a view), so they survive
+    /// navigation and die on quit (senders dropped → proxy tasks end).
+    pub forwards: Vec<Forward>,
+    next_forward_id: u64,
+}
+
+/// One live port-forward.
+pub struct Forward {
+    pub id: u64,
+    pub ns: String,
+    pub pod: String,
+    pub container: Option<String>,
+    pub pod_port: u16,
+    pub local_port: u16,
+    pub started: std::time::Instant,
+    pub stop: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl Forward {
+    /// Stops the proxy task; idempotent.
+    pub fn stop(&mut self) {
+        if let Some(tx) = self.stop.take() {
+            let _ = tx.send(());
+        }
+    }
 }
 
 impl Sessions {
     pub fn new(store: KubeconfigStore) -> Self {
         Sessions {
             store,
-            ..Default::default()
+            map: Default::default(),
+            kinds: Default::default(),
+            present: Default::default(),
+            active: None,
+            forwards: Default::default(),
+            next_forward_id: 0,
         }
+    }
+
+    pub fn add_forward(&mut self, f: Forward) {
+        self.forwards.push(f);
+    }
+
+    pub fn next_forward_id(&mut self) -> u64 {
+        self.next_forward_id += 1;
+        self.next_forward_id
+    }
+
+    pub fn stop_forward(&mut self, id: u64) {
+        if let Some(f) = self.forwards.iter_mut().find(|f| f.id == id) {
+            f.stop();
+        }
+        self.forwards.retain(|f| f.id != id);
     }
 
     pub fn active_session(&self) -> Option<Arc<ClusterSession>> {

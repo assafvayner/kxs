@@ -13,4 +13,9 @@ pub struct AppCtx {
     pub readonly: bool,
     /// (columns, rows) of the terminal.
     pub size: (u16, u16),
+    /// Live port-forwards ("ns/pod"), for the Pods view PF column.
+    pub forwards: Vec<String>,
+    /// Full registry snapshot for the Forwards view:
+    /// (id, ns, pod, pod_port, local_port, age_secs).
+    pub forward_rows: Vec<(u64, String, String, u16, u16, i64)>,
 }

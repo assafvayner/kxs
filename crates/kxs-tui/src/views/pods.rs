@@ -53,6 +53,10 @@ pub struct PodsView {
     selected: Option<String>,
     handle: Option<StopHandle>,
     pending: bool,
+    /// Awaiting container resolution for exec / port-forward.
+    pending_exec: bool,
+    pending_pf: bool,
+    pf_ns_pod: (String, String),
     status: Option<String>,
     viewport_rows: Cell<u16>,
 }
@@ -87,6 +91,9 @@ impl PodsView {
             selected: None,
             handle: None,
             pending: false,
+            pending_exec: false,
+            pending_pf: false,
+            pf_ns_pod: (String::new(), String::new()),
             status: None,
             viewport_rows: Cell::new(20),
         }
@@ -460,6 +467,110 @@ impl View for PodsView {
                     }
                 }
                 vec![]
+            }
+            crate::msg::Msg::Fetched {
+                result: Ok(crate::cmd::FetchResult::ExecContainers { ns, pod, infos }),
+                ..
+            } => {
+                self.pf_ns_pod = (ns.clone(), pod.clone());
+                self.pending_exec = false;
+                let exec: Vec<kxs_cluster::pods::ContainerInfo> = infos
+                    .iter()
+                    .filter(|c| !c.init_container)
+                    .cloned()
+                    .collect();
+                match exec.len() {
+                    0 => {
+                        self.status = Some("no exec-able containers".into());
+                        vec![]
+                    }
+                    1 => {
+                        vec![Cmd::Suspend(crate::cmd::SuspendAction::Exec {
+                            ns: self.pf_ns_pod.0.clone(),
+                            pod: self.pf_ns_pod.1.clone(),
+                            container: Some(exec[0].name.clone()),
+                        })]
+                    }
+                    _ => {
+                        let options = exec
+                            .iter()
+                            .map(|c| (c.name.clone(), c.image.clone()))
+                            .collect();
+                        self.pending_exec = true;
+                        vec![Cmd::PickExec {
+                            view: self.id,
+                            ns: self.pf_ns_pod.0.clone(),
+                            pod: self.pf_ns_pod.1.clone(),
+                            options,
+                        }]
+                    }
+                }
+            }
+            crate::msg::Msg::Fetched {
+                result: Ok(crate::cmd::FetchResult::ForwardPorts { ns, pod, choices }),
+                ..
+            } => {
+                self.pf_ns_pod = (ns.clone(), pod.clone());
+                self.pending_pf = false;
+                if choices.len() == 1 {
+                    let c = &choices[0];
+                    vec![Cmd::StartForward {
+                        view: self.id,
+                        ns: self.pf_ns_pod.0.clone(),
+                        pod: self.pf_ns_pod.1.clone(),
+                        port: c.port,
+                    }]
+                } else {
+                    self.pending_pf = true;
+                    vec![Cmd::PickExec {
+                        view: self.id,
+                        ns: self.pf_ns_pod.0.clone(),
+                        pod: self.pf_ns_pod.1.clone(),
+                        options: choices
+                            .iter()
+                            .map(|c| (c.port.to_string(), c.label.clone()))
+                            .collect(),
+                    }]
+                }
+            }
+            crate::msg::Msg::Fetched {
+                result: Ok(crate::cmd::FetchResult::Endpoint(pod, port)),
+                ..
+            } => {
+                self.pending_pf = false;
+                vec![Cmd::StartForward {
+                    view: self.id,
+                    ns: self.pf_ns_pod.0.clone(),
+                    pod: pod.clone(),
+                    port: *port,
+                }]
+            }
+            crate::msg::Msg::Picked { choice, .. } => {
+                let Some(choice) = choice else { return vec![] };
+                if self.pending_exec {
+                    self.pending_exec = false;
+                    vec![Cmd::Suspend(crate::cmd::SuspendAction::Exec {
+                        ns: self.pf_ns_pod.0.clone(),
+                        pod: self.pf_ns_pod.1.clone(),
+                        container: Some(choice.clone()),
+                    })]
+                } else if self.pending_pf {
+                    self.pending_pf = false;
+                    match choice.parse::<u16>() {
+                        Ok(port) => vec![Cmd::StartForward {
+                            view: self.id,
+                            ns: self.pf_ns_pod.0.clone(),
+                            pod: self.pf_ns_pod.1.clone(),
+                            port,
+                        }],
+                        Err(_) => {
+                            self.status = Some(format!("bad port: {choice}"));
+                            vec![]
+                        }
+                    }
+                } else {
+                    vec![]
+                }
             }
             crate::msg::Msg::Fetched {
                 result: Ok(crate::cmd::FetchResult::Selector(s)),

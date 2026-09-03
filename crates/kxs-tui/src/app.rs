@@ -116,6 +116,25 @@ impl App {
             present: s.active_present(),
             readonly,
             size: self.chrome.size,
+            forwards: s
+                .forwards
+                .iter()
+                .map(|f| format!("{}/{}", f.ns, f.pod))
+                .collect(),
+            forward_rows: s
+                .forwards
+                .iter()
+                .map(|f| {
+                    (
+                        f.id,
+                        f.ns.clone(),
+                        f.pod.clone(),
+                        f.pod_port,
+                        f.local_port,
+                        f.started.elapsed().as_secs() as i64,
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -145,6 +164,26 @@ impl App {
         entry.favorites.truncate(9);
         drop(cfg);
         self.sync_chrome();
+    }
+
+    /// Container picker for exec.
+    pub fn open_exec_pick(
+        &mut self,
+        view: ViewId,
+        ns: String,
+        pod: String,
+        options: Vec<(String, String)>,
+    ) {
+        self.chrome
+            .open_pick(format!("Exec({ns}/{pod})"), options, view);
+    }
+
+    /// Live theme preview (ThemePicker `j/k`).
+    pub fn preview_theme(&mut self, id: &str) {
+        let th = crate::theme::get(id);
+        if th.id == id {
+            self.theme = th;
+        }
     }
 
     /// Confirm-and-undo dialog from the Rollout view.
@@ -259,6 +298,19 @@ impl App {
                     Err(e) => self.chrome.flash(e.clone(), true),
                 }
                 let _ = m;
+                vec![]
+            }
+            Msg::ForwardStarted {
+                view,
+                id,
+                local_port,
+            } => {
+                if !self.on_stack(view) {
+                    return vec![];
+                }
+                self.chrome
+                    .flash(format!("forward started on 127.0.0.1:{local_port}"), false);
+                let _ = id;
                 vec![]
             }
             Msg::Picked { view, choice } => {
@@ -569,6 +621,9 @@ impl App {
                 | KeyCode::Char('t')
                 | KeyCode::Char('S')
                 | KeyCode::Char('h')
+                | KeyCode::Char('x')
+                | KeyCode::Char('F')
+                | KeyCode::Char('f')
         ) || ctrl_d
         {
             let enter_wanted = self.views.last().is_some_and(|v| v.wants_enter());
@@ -581,6 +636,25 @@ impl App {
                     KeyCode::Char('l') => return self.open_logs(&t, false),
                     KeyCode::Char('L') => return self.open_logs(&t, true),
                     KeyCode::Enter => return self.open_enter(&t),
+                    KeyCode::Char('x')
+                        if matches!(t.kind.kind.as_str(), "ConfigMap" | "Secret") =>
+                    {
+                        let view = Box::new(crate::views::values::ValuesView::new(self, t.clone()));
+                        return self.push_view(view);
+                    }
+                    KeyCode::Char('F') if t.kind.kind == "Pod" => {
+                        return self.begin_port_forward(&t);
+                    }
+                    KeyCode::Char('F') if t.kind.kind == "Service" => {
+                        return self.begin_service_forward(&t);
+                    }
+                    KeyCode::Char('f') => {
+                        let view = Box::new(crate::views::forwards::ForwardsView::new(self));
+                        return self.push_view(view);
+                    }
+                    KeyCode::Char('s') if t.kind.kind == "Pod" => {
+                        return self.begin_exec(&t);
+                    }
                     KeyCode::Char('h') if kxs_cluster::kinds::is_restartable(&t.kind.kind) => {
                         let view =
                             Box::new(crate::views::rollout::RolloutView::new(self, t.clone()));
@@ -784,6 +858,59 @@ impl App {
                 }
             }
         }
+    }
+
+    /// shift-f on a Pod: resolve its container ports, then open the forward
+    /// flow (single port starts directly; several go through the picker).
+    fn begin_port_forward(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
+        let view = self.views.last().map(|v| v.id());
+        let Some(view) = view else { return vec![] };
+        if self.ctx().readonly {
+            self.chrome.flash("readonly: port-forward disabled", true);
+            return vec![];
+        }
+        vec![Cmd::Fetch {
+            view,
+            what: crate::cmd::Fetch::ExecTargets {
+                ns: t.ns.clone().unwrap_or_default(),
+                pod: t.name.clone(),
+            },
+        }]
+    }
+
+    /// shift-f on a Service: resolve a ready backing pod + port.
+    fn begin_service_forward(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
+        let view = self.views.last().map(|v| v.id());
+        let Some(view) = view else { return vec![] };
+        if self.ctx().readonly {
+            self.chrome.flash("readonly: port-forward disabled", true);
+            return vec![];
+        }
+        vec![Cmd::Fetch {
+            view,
+            what: crate::cmd::Fetch::ServiceEndpoint {
+                ns: t.ns.clone().unwrap_or_default(),
+                name: t.name.clone(),
+                port: 80,
+            },
+        }]
+    }
+
+    /// s on a Pod: exec; several containers go through the picker.
+    fn begin_exec(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
+        let view = self.views.last().map(|v| v.id());
+        let Some(view) = view else { return vec![] };
+        if self.ctx().readonly {
+            self.chrome.flash("readonly: shell disabled", true);
+            return vec![];
+        }
+        vec![Cmd::Fetch {
+            view,
+            what: crate::cmd::Fetch::ForwardPorts {
+                ns: t.ns.clone().unwrap_or_default(),
+                pod: t.name.clone(),
+            },
+        }]
     }
 
     /// Mutating keys; `None` = not a mutation key (fall through to the view).

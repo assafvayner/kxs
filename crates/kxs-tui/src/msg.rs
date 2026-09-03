@@ -52,6 +52,12 @@ pub enum Msg {
         m: crate::cmd::Mutation,
         result: Result<Option<String>, String>,
     },
+    /// A port-forward started: id and bound local port.
+    ForwardStarted {
+        view: ViewId,
+        id: u64,
+        local_port: u16,
+    },
     /// Resolution of a Chrome pick modal; `None` = cancelled.
     Picked {
         view: ViewId,

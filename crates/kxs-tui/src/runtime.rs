@@ -126,6 +126,31 @@ async fn fetch(sessions: &Shared, what: Fetch) -> Result<FetchResult, String> {
         Fetch::RolloutHistory { ns, name } => Ok(FetchResult::Rollout(
             kxs_cluster::workloads::rollout_history(sess.client.clone(), &ns, &name).await?,
         )),
+        Fetch::ConfigValues { ns, name, kind } => Ok(FetchResult::Values(
+            kxs_cluster::workloads::config_values(sess.client.clone(), &ns, &name, &kind).await?,
+        )),
+        Fetch::ExecTargets { ns, pod } => Ok(FetchResult::ExecContainers {
+            ns: ns.clone(),
+            pod: pod.clone(),
+            infos: kxs_cluster::pods::list_container_info(sess.client.clone(), &ns, &pod).await?,
+        }),
+        Fetch::ForwardPorts { ns, pod } => Ok(FetchResult::ForwardPorts {
+            ns: ns.clone(),
+            pod: pod.clone(),
+            choices: kxs_cluster::containers::port_choices(
+                &kxs_cluster::pods::list_container_info(sess.client.clone(), &ns, &pod).await?,
+            ),
+        }),
+        Fetch::ServiceEndpoint { ns, name, port } => {
+            let (pod, container_port) = kxs_cluster::workloads::resolve_service_endpoint(
+                sess.client.clone(),
+                &ns,
+                &name,
+                port,
+            )
+            .await?;
+            Ok(FetchResult::Endpoint(pod, container_port))
+        }
     }
 }
 
@@ -206,8 +231,21 @@ impl Runtime {
                     };
                     let result = match client {
                         Some(client) => match action {
-                            SuspendAction::Edit { .. } => {
-                                crate::suspend::run_edit(client, action).await
+                            SuspendAction::Edit { kind, ns, name } => {
+                                crate::suspend::run_edit(client, kind, ns, name).await
+                            }
+                            SuspendAction::Exec { ns, pod, container } => {
+                                let size = crossterm::terminal::size().unwrap_or((80, 24));
+                                let (cols, rows) = size;
+                                crate::suspend::run_exec(
+                                    client,
+                                    &ns,
+                                    &pod,
+                                    container.as_deref(),
+                                    cols,
+                                    rows,
+                                )
+                                .await
                             }
                         },
                         None => Err("not connected".into()),
@@ -216,7 +254,7 @@ impl Runtime {
                     let _ = crate::terminal::clear_frame(screen);
                     match result {
                         Ok(Some(text)) => app.chrome.flash(text, false),
-                        Ok(None) => app.chrome.flash("no changes", false),
+                        Ok(None) => {}
                         Err(e) => app.chrome.flash(e, true),
                     }
                 } else if self.execute(cmd, app).await? {
@@ -375,6 +413,79 @@ impl Runtime {
                     view,
                     handle: StopHandle(stop_tx),
                 });
+                Ok(false)
+            }
+            Cmd::StartForward {
+                view,
+                ns,
+                pod,
+                port,
+            } => {
+                let client = {
+                    let s = self.sessions.lock().expect("sessions lock");
+                    s.active_session().map(|sess| sess.client.clone())
+                };
+                let Some(client) = client else {
+                    let _ = self.tx.send(Msg::Error {
+                        view: Some(view),
+                        text: "not connected".into(),
+                    });
+                    return Ok(false);
+                };
+                let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+                let started =
+                    kxs_cluster::portforward::start(client, ns.clone(), pod.clone(), port, stop_rx)
+                        .await;
+                match started {
+                    Ok((local_port, _handle)) => {
+                        let id = {
+                            let mut s = self.sessions.lock().expect("sessions lock");
+                            let id = s.next_forward_id();
+                            s.add_forward(crate::sessions::Forward {
+                                id,
+                                ns: ns.clone(),
+                                pod: pod.clone(),
+                                container: None,
+                                pod_port: port,
+                                local_port,
+                                started: std::time::Instant::now(),
+                                stop: Some(stop_tx),
+                            });
+                            id
+                        };
+                        let _ = self.tx.send(Msg::ForwardStarted {
+                            view,
+                            id,
+                            local_port,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = self.tx.send(Msg::Error {
+                            view: Some(view),
+                            text: format!("port-forward: {e}"),
+                        });
+                    }
+                }
+                Ok(false)
+            }
+            Cmd::StopForward { id } => {
+                self.sessions
+                    .lock()
+                    .expect("sessions lock")
+                    .stop_forward(id);
+                Ok(false)
+            }
+            Cmd::PickExec {
+                view,
+                ns,
+                pod,
+                options,
+            } => {
+                app.open_exec_pick(view, ns, pod, options);
+                Ok(false)
+            }
+            Cmd::PreviewTheme { id } => {
+                app.preview_theme(&id);
                 Ok(false)
             }
             Cmd::PollMetrics { view, every } => {
