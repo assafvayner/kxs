@@ -1,12 +1,16 @@
-use notify::{RecursiveMode, Watcher};
+//! Kubeconfig file watching, behind the `watch` feature. Shared by both
+//! frontends: the desktop app reloads its `AppState` store, the TUI refreshes
+//! its Contexts view.
+
+use notify::Watcher;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
 
 /// Watches the parent dirs of all kubeconfig files; on changes (debounced to
-/// 300ms of quiet) reloads the store and notifies the frontend. Our own writes
+/// 300ms of quiet) calls `on_change` on a background thread. Our own writes
 /// and backups also fire this — a redundant refresh is harmless.
-pub fn spawn(app: AppHandle, paths: Vec<std::path::PathBuf>) {
+pub fn spawn_watcher(paths: Vec<PathBuf>, on_change: impl Fn() + Send + 'static) {
     std::thread::spawn(move || {
         let (tx, rx) = mpsc::channel();
         let mut watcher = match notify::recommended_watcher(move |res| {
@@ -25,20 +29,13 @@ pub fn spawn(app: AppHandle, paths: Vec<std::path::PathBuf>) {
         dirs.sort();
         dirs.dedup();
         for d in &dirs {
-            if let Err(e) = watcher.watch(d, RecursiveMode::NonRecursive) {
+            if let Err(e) = watcher.watch(d, notify::RecursiveMode::NonRecursive) {
                 eprintln!("kxs: cannot watch {}: {e}", d.display());
             }
         }
         while rx.recv().is_ok() {
             while rx.recv_timeout(Duration::from_millis(300)).is_ok() {}
-            let state = app.state::<crate::ipc::AppState>();
-            if let Ok(mut store) = state.store.lock() {
-                let fresh_warnings = store.reload();
-                if let Ok(mut warnings) = state.warnings.lock() {
-                    *warnings = fresh_warnings;
-                }
-            }
-            let _ = app.emit("kubeconfig://changed", ());
+            on_change();
         }
     });
 }
