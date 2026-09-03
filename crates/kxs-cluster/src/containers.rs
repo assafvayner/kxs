@@ -79,6 +79,7 @@ mod tests {
             name: name.into(),
             image: image.into(),
             ready,
+            state: if ready { "running" } else { "waiting" }.into(),
             restarts: 0,
             ports: ports
                 .into_iter()

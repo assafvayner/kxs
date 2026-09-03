@@ -231,6 +231,7 @@ fn yaml_view_renders_syntax_text() {
         kind: pod_kind(),
         ns: Some("default".into()),
         name: "web".into(),
+        container: None,
     };
     let view = kxs_tui::views::yaml::YamlView::new(&mut app, &target);
     let id = view.id();
@@ -257,6 +258,7 @@ fn describe_view_renders_plain_text() {
         kind: pod_kind(),
         ns: Some("default".into()),
         name: "web".into(),
+        container: None,
     };
     let view = kxs_tui::views::describe::DescribeView::new(&mut app, &target);
     let id = view.id();
@@ -315,6 +317,195 @@ fn y_key_pushes_yaml_and_fetches() {
         .iter()
         .any(|c| matches!(c, kxs_tui::cmd::Cmd::Fetch { .. })));
     // Esc pops back to the table
+    app.update(Msg::Key(KeyEvent::from(KeyCode::Esc)));
+    assert_eq!(app.views.len(), 1);
+}
+
+fn pod_row(name: &str, status: &str, created: &str) -> kxs_cluster::pods::PodRow {
+    kxs_cluster::pods::PodRow {
+        key: format!("default/{name}"),
+        name: name.into(),
+        namespace: "default".into(),
+        ready: "1/1".into(),
+        status: status.into(),
+        restarts: 0,
+        ip: Some("10.0.0.1".into()),
+        node: Some("n1".into()),
+        created: Some(created.into()),
+        cpu_request_millis: Some(250),
+        mem_request_mib: Some(128),
+    }
+}
+
+#[test]
+fn pods_view_renders_rows_and_status_colors() {
+    let mut app = test_app();
+    let view = kxs_tui::views::pods::PodsView::new(&mut app, Some("default".into()));
+    let id = view.id();
+    app.push_view(Box::new(view));
+    app.update(kxs_tui::msg::Msg::Pod {
+        view: id,
+        ev: kxs_cluster::pods::PodEvent::Snapshot {
+            rows: vec![
+                pod_row("web", "Running", "2026-09-01T00:00:00Z"),
+                pod_row("bad", "CrashLoopBackOff", "2026-09-01T00:00:00Z"),
+            ],
+        },
+    });
+    let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+    term.draw(|f| app.render(f)).unwrap();
+    let text = buf_text(&term);
+    assert!(text.contains("Pods(default)[2]"), "{text}");
+    assert!(text.contains("web"), "{text}");
+    assert!(text.contains("CrashLoopBackOff"), "{text}");
+    assert!(text.contains("RESTARTS"), "{text}");
+    // metrics missing → dash
+    assert!(text.contains("—"), "{text}");
+}
+
+#[test]
+fn pods_view_late_events_are_dropped() {
+    let mut app = test_app();
+    let view = kxs_tui::views::pods::PodsView::new(&mut app, Some("default".into()));
+    let id = view.id();
+    app.push_view(Box::new(view));
+    app.pop_view();
+    let cmds = app.update(kxs_tui::msg::Msg::Pod {
+        view: id,
+        ev: kxs_cluster::pods::PodEvent::Snapshot { rows: vec![] },
+    });
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn logs_view_renders_lines_and_filters() {
+    let mut app = test_app();
+    let target = kxs_tui::view::Target {
+        kind: pod_kind(),
+        ns: Some("default".into()),
+        name: "web".into(),
+        container: Some("web".into()),
+    };
+    let view = kxs_tui::views::logs::LogsView::new_with_container(&mut app, target);
+    let id = view.id();
+    app.push_view(Box::new(view));
+    app.update(kxs_tui::msg::Msg::LogLines {
+        view: id,
+        pod: "web".into(),
+        lines: vec!["started".into(), "serving on :8080".into()],
+    });
+    let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    term.draw(|f| app.render(f)).unwrap();
+    let text = buf_text(&term);
+    assert!(text.contains("serving on :8080"), "{text}");
+    // filter via /
+    app.update(Msg::Key(KeyEvent::from(KeyCode::Char('/'))));
+    for c in "serving".chars() {
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Char(c))));
+    }
+    app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+    let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    term.draw(|f| app.render(f)).unwrap();
+    let text = buf_text(&term);
+    assert!(text.contains("serving on :8080"), "{text}");
+    assert!(!text.contains("started"), "{text}");
+}
+
+#[test]
+fn events_view_sorts_newest_first_and_colors_warnings() {
+    let mut app = test_app();
+    let view = kxs_tui::views::events::EventsView::new(&mut app, Some("default".into()));
+    let id = view.id();
+    app.push_view(Box::new(view));
+    let row = |created: Option<&str>, cells: Vec<&str>| kxs_cluster::resources::ResourceRow {
+        key: cells[2].to_string(),
+        name: String::new(),
+        namespace: Some("default".into()),
+        cells: cells.into_iter().map(String::from).collect(),
+        created: created.map(String::from),
+    };
+    app.update(Msg::Table {
+        view: id,
+        ev: TableEvent::Table {
+            table: kxs_cluster::resources::ResourceTable {
+                columns: ["Last Seen", "Type", "Reason", "Object", "Message", "Age"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                rows: vec![
+                    row(
+                        None,
+                        vec!["3h", "Normal", "Pulling", "pod/a", "pulling", "3h"],
+                    ),
+                    row(
+                        None,
+                        vec!["30s", "Warning", "BackOff", "pod/b", "back-off", "30s"],
+                    ),
+                ],
+            },
+        },
+    });
+    let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+    term.draw(|f| app.render(f)).unwrap();
+    let text = buf_text(&term);
+    assert!(text.contains("Events(default)[2]"), "{text}");
+    // newest first: pod/b (Last Seen 30s) before pod/a (3h); cell text may be
+    // clipped by column width, so match on the object cells
+    let b = text.find("pod/b").unwrap();
+    let a = text.find("pod/a").unwrap();
+    assert!(b < a, "{text}");
+}
+
+#[test]
+fn metrics_view_renders_nodes_and_pods() {
+    let mut app = test_app();
+    let view = kxs_tui::views::metrics::MetricsView::new(&mut app);
+    let id = view.id();
+    app.push_view(Box::new(view));
+    app.update(kxs_tui::msg::Msg::Metrics {
+        view: id,
+        pods: Ok(vec![kxs_cluster::metrics::MetricsRow {
+            key: "default/web".into(),
+            name: "web".into(),
+            namespace: Some("default".into()),
+            cpu_millicores: 12,
+            mem_mib: 48,
+        }]),
+        nodes: Ok(vec![kxs_cluster::metrics::NodeMetricsRow {
+            name: "kind-control-plane".into(),
+            cpu_millicores: 412,
+            cpu_allocatable_millicores: Some(4000),
+            mem_mib: 1024,
+            mem_allocatable_mib: Some(8192),
+        }]),
+    });
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| app.render(f)).unwrap();
+    let text = buf_text(&term);
+    assert!(text.contains("kind-control-plane"), "{text}");
+    assert!(text.contains("412m/4000m 10%"), "{text}");
+    assert!(text.contains("Pods by CPU"), "{text}");
+    assert!(text.contains("web"), "{text}");
+    // header cpu/mem updated too
+    assert!(text.contains("CPU/MEM: 10% / 13%"), "{text}");
+}
+
+#[test]
+fn enter_on_pod_opens_containers_and_fetches() {
+    let mut app = test_app();
+    let view = kxs_tui::views::pods::PodsView::new(&mut app, Some("default".into()));
+    let id = view.id();
+    app.push_view(Box::new(view));
+    app.update(kxs_tui::msg::Msg::Pod {
+        view: id,
+        ev: kxs_cluster::pods::PodEvent::Snapshot {
+            rows: vec![pod_row("web", "Running", "2026-09-01T00:00:00Z")],
+        },
+    });
+    app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+    assert_eq!(app.views.len(), 2);
+    assert_eq!(app.views[1].crumb(), "containers");
+    // Esc back
     app.update(Msg::Key(KeyEvent::from(KeyCode::Esc)));
     assert_eq!(app.views.len(), 1);
 }

@@ -41,7 +41,8 @@ pub async fn workload_pods(
 }
 
 /// The label selector string of a workload ("k1=v1,k2=v2"), for driving a pod
-/// watch from a pod-owner row. Errors when the workload has no usable selector.
+/// watch from a pod-owner row. For a CronJob the Job template's metadata labels
+/// are used (Job pods inherit them). Errors when there is no usable selector.
 pub async fn workload_selector(
     client: Client,
     group: &str,
@@ -51,6 +52,29 @@ pub async fn workload_selector(
     namespace: &str,
     name: &str,
 ) -> Result<String, String> {
+    if kind == "CronJob" {
+        let api: Api<CronJob> = Api::namespaced(client, namespace);
+        let cj = api
+            .get_opt(name)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("CronJob \"{name}\" not found"))?;
+        let labels = cj
+            .spec
+            .as_ref()
+            .and_then(|s| s.job_template.metadata.as_ref())
+            .and_then(|m| m.labels.clone())
+            .ok_or_else(|| format!("CronJob \"{name}\" job template has no labels"))?;
+        if labels.is_empty() {
+            return Err(format!("CronJob \"{name}\" job template has no labels"));
+        }
+        let mut parts: Vec<String> = labels
+            .into_iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        parts.sort();
+        return Ok(parts.join(","));
+    }
     let ar = crate::resources::api_resource(group, version, kind, plural);
     let api: Api<DynamicObject> = Api::namespaced_with(client, namespace, &ar);
     let obj = api

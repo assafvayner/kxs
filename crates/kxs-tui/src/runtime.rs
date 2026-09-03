@@ -11,6 +11,8 @@ use tokio::sync::mpsc;
 
 use kxs_cluster::bridge;
 use kxs_cluster::discovery;
+use kxs_cluster::logs::run_log_stream;
+use kxs_cluster::pods::run_pod_watch;
 use kxs_cluster::resources::{get_yaml, run_table_watch};
 use kxs_cluster::session;
 
@@ -92,6 +94,33 @@ async fn fetch(sessions: &Shared, what: Fetch) -> Result<FetchResult, String> {
                 .await?,
         )),
         Fetch::Namespaces => Ok(FetchResult::Namespaces(session::namespaces(&sess).await?)),
+        Fetch::Containers { ns, pod } => Ok(FetchResult::Containers(
+            kxs_cluster::pods::list_container_info(sess.client.clone(), &ns, &pod).await?,
+        )),
+        Fetch::WorkloadSelector { kind, ns, name } => Ok(FetchResult::Selector(
+            kxs_cluster::workloads::workload_selector(
+                sess.client.clone(),
+                &kind.group,
+                &kind.version,
+                &kind.kind,
+                &kind.plural,
+                &ns,
+                &name,
+            )
+            .await?,
+        )),
+        Fetch::WorkloadPods { kind, ns, name } => Ok(FetchResult::PodNames(
+            kxs_cluster::workloads::workload_pods(
+                sess.client.clone(),
+                &kind.group,
+                &kind.version,
+                &kind.kind,
+                &kind.plural,
+                &ns,
+                &name,
+            )
+            .await?,
+        )),
     }
 }
 
@@ -99,6 +128,7 @@ pub struct Runtime {
     tx: mpsc::UnboundedSender<Msg>,
     sessions: Shared,
     config: Arc<Mutex<Config>>,
+    metrics_poller: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Runtime {
@@ -111,6 +141,7 @@ impl Runtime {
             tx,
             sessions,
             config,
+            metrics_poller: None,
         }
     }
 
@@ -234,6 +265,117 @@ impl Runtime {
                 });
                 Ok(false)
             }
+            Cmd::StartPodWatch { view, ns, selector } => {
+                let client = {
+                    let s = self.sessions.lock().expect("sessions lock");
+                    s.active_session().map(|sess| sess.client.clone())
+                };
+                let Some(client) = client else {
+                    let _ = self.tx.send(Msg::Error {
+                        view: Some(view),
+                        text: "not connected".into(),
+                    });
+                    return Ok(false);
+                };
+                let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    run_pod_watch(
+                        client,
+                        ns,
+                        selector,
+                        move |ev: kxs_cluster::pods::PodEvent| {
+                            tx.send(Msg::Pod { view, ev }).is_ok()
+                        },
+                        stop_rx,
+                    )
+                    .await;
+                });
+                let _ = self.tx.send(Msg::Started {
+                    view,
+                    handle: StopHandle(stop_tx),
+                });
+                Ok(false)
+            }
+            Cmd::StartLogs { view, req } => {
+                let client = {
+                    let s = self.sessions.lock().expect("sessions lock");
+                    s.active_session().map(|sess| sess.client.clone())
+                };
+                let Some(client) = client else {
+                    let _ = self.tx.send(Msg::Error {
+                        view: Some(view),
+                        text: "not connected".into(),
+                    });
+                    return Ok(false);
+                };
+                let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+                let tx = self.tx.clone();
+                let pod = req.pod.clone();
+                tokio::spawn(async move {
+                    run_log_stream(
+                        client,
+                        req,
+                        move |ev: kxs_cluster::logs::LogEvent| match ev {
+                            kxs_cluster::logs::LogEvent::Lines { lines } => tx
+                                .send(Msg::LogLines {
+                                    view,
+                                    pod: pod.clone(),
+                                    lines,
+                                })
+                                .is_ok(),
+                            kxs_cluster::logs::LogEvent::Error { message } => tx
+                                .send(Msg::LogStatus {
+                                    view,
+                                    pod: pod.clone(),
+                                    status: Err(message),
+                                })
+                                .is_ok(),
+                            kxs_cluster::logs::LogEvent::Eof => tx
+                                .send(Msg::LogStatus {
+                                    view,
+                                    pod: pod.clone(),
+                                    status: Ok(()),
+                                })
+                                .is_ok(),
+                        },
+                        stop_rx,
+                    )
+                    .await;
+                });
+                let _ = self.tx.send(Msg::Started {
+                    view,
+                    handle: StopHandle(stop_tx),
+                });
+                Ok(false)
+            }
+            Cmd::PollMetrics { view, every } => {
+                // one poller per session; abort the previous on :ctx switch
+                if let Some(prev) = self.metrics_poller.take() {
+                    prev.abort();
+                }
+                let client = {
+                    let s = self.sessions.lock().expect("sessions lock");
+                    s.active_session().map(|sess| sess.client.clone())
+                };
+                let Some(client) = client else {
+                    return Ok(false);
+                };
+                let tx = self.tx.clone();
+                self.metrics_poller = Some(tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(every);
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        tick.tick().await;
+                        let pods = kxs_cluster::metrics::pod_metrics(client.clone(), None).await;
+                        let nodes = kxs_cluster::metrics::node_metrics(client.clone()).await;
+                        if tx.send(Msg::Metrics { view, pods, nodes }).is_err() {
+                            break;
+                        }
+                    }
+                }));
+                Ok(false)
+            }
             Cmd::Fetch { view, what } => {
                 let tx = self.tx.clone();
                 let sessions = self.sessions.clone();
@@ -241,6 +383,19 @@ impl Runtime {
                     let result = fetch(&sessions, what).await;
                     let _ = tx.send(Msg::Fetched { view, result });
                 });
+                Ok(false)
+            }
+            Cmd::PickContainer {
+                view,
+                ns,
+                pod,
+                options,
+            } => {
+                app.open_container_pick(view, ns, pod, options);
+                Ok(false)
+            }
+            Cmd::PopView => {
+                app.pop_view();
                 Ok(false)
             }
             Cmd::SwitchNamespace { ns } => {

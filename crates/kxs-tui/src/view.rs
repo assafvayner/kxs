@@ -19,6 +19,8 @@ pub struct Target {
     pub kind: ResourceKind,
     pub ns: Option<String>,
     pub name: String,
+    /// Selected container, when the view is scoped to one.
+    pub container: Option<String>,
 }
 
 pub trait View {
@@ -54,6 +56,11 @@ pub trait View {
     /// The selected resource row, if this view is a resource listing.
     fn target(&self) -> Option<Target> {
         None
+    }
+    /// Views like Logs consume `0`-`5` for their own presets, overriding the
+    /// global namespace favorites while they are the top view.
+    fn handles_digits(&self) -> bool {
+        false
     }
     /// Current filter text, shown in the title row.
     fn filter(&self) -> String {

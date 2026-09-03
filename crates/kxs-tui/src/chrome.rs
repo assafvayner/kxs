@@ -11,7 +11,7 @@ use ratatui::Frame;
 use tui_input::{Input, InputRequest};
 
 use crate::theme::Theme;
-use crate::view::Hint;
+use crate::view::{Hint, ViewId};
 
 pub const FLASH_DURATION: Duration = Duration::from_secs(5);
 
@@ -43,6 +43,15 @@ pub struct Flash {
     pub until: Instant,
 }
 
+/// A centered options picker; the choice is routed back to `for_view` as
+/// `Msg::Picked` (Phase 4 grows this into confirm/input modals).
+pub struct PickModal {
+    pub title: String,
+    pub options: Vec<(String, String)>,
+    pub selected: usize,
+    pub for_view: ViewId,
+}
+
 /// Chrome owns everything that is not a body view: header data, the `:`/`/`
 /// prompt, flash messages, and (later phases) modals.
 #[derive(Default)]
@@ -55,6 +64,9 @@ pub struct Chrome {
     pub namespace: Option<String>,
     /// Namespace favorites for the header column; index 0 is the `0` key.
     pub favorites: Vec<String>,
+    /// "12% / 43%" from the metrics poll; hidden until the first result.
+    pub cpu_mem: Option<String>,
+    pub pick: Option<PickModal>,
     pub prompt: Option<Prompt>,
     pub flash: Option<Flash>,
     pub size: (u16, u16),
@@ -86,6 +98,41 @@ impl Chrome {
 
     pub fn close_prompt(&mut self) {
         self.prompt = None;
+    }
+
+    pub fn open_pick(&mut self, title: String, options: Vec<(String, String)>, for_view: ViewId) {
+        self.pick = Some(PickModal {
+            title,
+            options,
+            selected: 0,
+            for_view,
+        });
+    }
+
+    pub fn close_pick(&mut self) {
+        self.pick = None;
+    }
+
+    /// Feed a key to the open pick modal.
+    pub fn pick_key(&mut self, key: KeyEvent) -> PickOutcome {
+        let Some(pick) = &mut self.pick else {
+            return PickOutcome::Ignored;
+        };
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                pick.selected = (pick.selected + 1).min(pick.options.len().saturating_sub(1));
+                PickOutcome::Edited
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                pick.selected = pick.selected.saturating_sub(1);
+                PickOutcome::Edited
+            }
+            KeyCode::Enter => {
+                PickOutcome::Chose(pick.options.get(pick.selected).map(|(l, _)| l.clone()))
+            }
+            KeyCode::Esc => PickOutcome::Cancel,
+            _ => PickOutcome::Ignored,
+        }
     }
 
     /// Feed a key to the active prompt. Returns `Some(submitted_text)` on
@@ -185,7 +232,10 @@ impl Chrome {
             ]),
         ];
         if area.height > 4 {
-            info.push(Line::from(vec![Span::styled("CPU/MEM: —", label)]));
+            info.push(Line::from(vec![
+                Span::styled("CPU/MEM: ", label),
+                Span::styled(self.cpu_mem.clone().unwrap_or_else(|| "—".into()), value),
+            ]));
         }
         let info_w = (area.width / 3).clamp(16, 44);
         f.render_widget(
@@ -276,6 +326,60 @@ impl Chrome {
         }
     }
 
+    /// Centered modal for the pick dialog; takes precedence visually.
+    pub fn render_pick(&self, f: &mut Frame, area: Rect, th: &Theme) {
+        use ratatui::widgets::{Clear, List, ListItem};
+        let Some(pick) = &self.pick else { return };
+        let width = (area.width / 2).clamp(30, 60);
+        let height = (pick.options.len() as u16 + 2).clamp(4, (area.height / 2).max(4));
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let modal = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        f.render_widget(Clear, modal);
+        let items: Vec<ListItem> = pick
+            .options
+            .iter()
+            .enumerate()
+            .map(|(i, (label, hint))| {
+                let selected = i == pick.selected;
+                let mut spans = vec![Span::styled(
+                    format!(" {label}"),
+                    if selected {
+                        Style::new().fg(th.colors.bg).bg(th.colors.accent)
+                    } else {
+                        Style::new().fg(th.colors.fg)
+                    },
+                )];
+                if !hint.is_empty() {
+                    spans.push(Span::styled(
+                        format!("  {hint}"),
+                        if selected {
+                            Style::new().fg(th.colors.bg).bg(th.colors.accent)
+                        } else {
+                            Style::new().fg(th.colors.fg_dim)
+                        },
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+        let list = List::new(items).block(
+            ratatui::widgets::Block::new()
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_style(Style::new().fg(th.colors.accent))
+                .title(Line::from(Span::styled(
+                    pick.title.clone(),
+                    Style::new().fg(th.colors.accent),
+                ))),
+        );
+        f.render_widget(list, modal);
+    }
+
     pub fn render_footer(&self, f: &mut Frame, area: Rect, th: &Theme, crumbs: &[String]) {
         let label = Style::new().fg(th.colors.fg_dim);
         let mut spans: Vec<Span> = Vec::new();
@@ -342,6 +446,16 @@ impl Chrome {
         }
         f.render_widget(Paragraph::new(Line::from(spans)), area);
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum PickOutcome {
+    /// Enter: the chosen option label (`None` when the list is empty).
+    Chose(Option<String>),
+    /// Esc: cancel.
+    Cancel,
+    Edited,
+    Ignored,
 }
 
 #[derive(Debug, PartialEq)]

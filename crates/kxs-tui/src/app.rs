@@ -25,6 +25,8 @@ pub struct App {
     pub config: Arc<Mutex<Config>>,
     pub theme: Theme,
     next_view_id: ViewId,
+    /// One metrics-error flash per session ("missing metrics-server").
+    metrics_error_flashed: bool,
 }
 
 impl App {
@@ -40,6 +42,7 @@ impl App {
             config,
             theme,
             next_view_id: 1,
+            metrics_error_flashed: false,
         }
     }
 
@@ -144,6 +147,18 @@ impl App {
         self.sync_chrome();
     }
 
+    /// Open the Chrome container picker; the choice routes back to `view`.
+    pub fn open_container_pick(
+        &mut self,
+        view: ViewId,
+        ns: String,
+        pod: String,
+        options: Vec<(String, String)>,
+    ) {
+        let title = format!("Containers({ns}/{pod})");
+        self.chrome.open_pick(title, options, view);
+    }
+
     /// Execute a `:` command string (used by `--command` and the prompt).
     pub fn exec_command(&mut self, text: &str) -> Vec<Cmd> {
         let text = text.trim_start_matches(':');
@@ -199,6 +214,37 @@ impl App {
                 }
                 self.route(view, &Msg::Table { view, ev })
             }
+            Msg::Pod { view, ev } => {
+                if !self.on_stack(view) {
+                    return vec![];
+                }
+                self.route(view, &Msg::Pod { view, ev })
+            }
+            Msg::LogLines { view, pod, lines } => {
+                if !self.on_stack(view) {
+                    return vec![];
+                }
+                self.route(view, &Msg::LogLines { view, pod, lines })
+            }
+            Msg::LogStatus { view, pod, status } => {
+                if !self.on_stack(view) {
+                    return vec![];
+                }
+                self.route(view, &Msg::LogStatus { view, pod, status })
+            }
+            Msg::Metrics { view, pods, nodes } => {
+                self.on_metrics(&pods, &nodes);
+                if !self.on_stack(view) {
+                    return vec![];
+                }
+                self.route(view, &Msg::Metrics { view, pods, nodes })
+            }
+            Msg::Picked { view, choice } => {
+                if !self.on_stack(view) {
+                    return vec![];
+                }
+                self.route(view, &Msg::Picked { view, choice })
+            }
             Msg::Fetched { view, result } => {
                 if !self.on_stack(view) {
                     return vec![];
@@ -246,6 +292,54 @@ impl App {
         }
     }
 
+    /// Header CPU/MEM from the node metrics poll; one error flash per session.
+    fn on_metrics(
+        &mut self,
+        pods: &Result<Vec<kxs_cluster::metrics::MetricsRow>, String>,
+        nodes: &Result<Vec<kxs_cluster::metrics::NodeMetricsRow>, String>,
+    ) {
+        if let Err(e) = nodes {
+            if !self.metrics_error_flashed {
+                self.metrics_error_flashed = true;
+                self.chrome.flash(format!("metrics: {e}"), true);
+            }
+            return;
+        }
+        let nodes = nodes.as_ref().expect("nodes ok");
+        if nodes.is_empty() {
+            return; // metrics-server absent: hide the header line, no spam
+        }
+        let sum =
+            |get: fn(&kxs_cluster::metrics::NodeMetricsRow) -> (u64, Option<u64>)| -> (u64, u64) {
+                let mut used = 0u64;
+                let mut total = 0u64;
+                let mut known = false;
+                for n in nodes {
+                    let (u, t) = get(n);
+                    used += u;
+                    if let Some(t) = t {
+                        total += t;
+                        known = true;
+                    }
+                }
+                (used, if known { total } else { 0 })
+            };
+        let (cpu_used, cpu_total) = sum(|n| (n.cpu_millicores, n.cpu_allocatable_millicores));
+        let (mem_used, mem_total) = sum(|n| (n.mem_mib, n.mem_allocatable_mib));
+        let fmt = |used: u64, total: u64| -> String {
+            match kxs_cluster::utilization::percent(used, Some(total)) {
+                Some(p) => format!("{p}%"),
+                None => "—".into(),
+            }
+        };
+        self.chrome.cpu_mem = Some(format!(
+            "{} / {}",
+            fmt(cpu_used, cpu_total),
+            fmt(mem_used, mem_total)
+        ));
+        let _ = pods;
+    }
+
     fn on_stack(&self, id: ViewId) -> bool {
         self.views.iter().any(|v| v.id() == id)
     }
@@ -264,11 +358,25 @@ impl App {
         match result {
             Ok(_version) => {
                 self.sync_chrome();
+                self.metrics_error_flashed = false;
                 self.chrome.flash(format!("connected: {context}"), false);
-                match crate::views::resources::open(self, "pods", None) {
-                    Some(view) => self.replace_views(vec![view]),
-                    None => vec![],
+                let view = Box::new(crate::views::pods::PodsView::new(
+                    self,
+                    self.ctx().namespace,
+                ));
+                let mut cmds = self.replace_views(vec![view]);
+                if let Some(id) = self.views.last().map(|v| v.id()) {
+                    let secs = self
+                        .config
+                        .lock()
+                        .map(|c| c.metrics_interval_secs)
+                        .unwrap_or(15);
+                    cmds.push(Cmd::PollMetrics {
+                        view: id,
+                        every: std::time::Duration::from_secs(secs.max(1)),
+                    });
                 }
+                cmds
             }
             Err(text) => {
                 self.chrome
@@ -284,6 +392,28 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Vec<Cmd> {
+        // 0. pick modal captures everything while open
+        if self.chrome.pick.is_some() {
+            return match self.chrome.pick_key(key) {
+                crate::chrome::PickOutcome::Chose(choice) => {
+                    let view = self.chrome.pick.as_ref().map(|p| p.for_view);
+                    self.chrome.close_pick();
+                    match view {
+                        Some(view) => self.route(view, &Msg::Picked { view, choice }),
+                        None => vec![],
+                    }
+                }
+                crate::chrome::PickOutcome::Cancel => {
+                    let view = self.chrome.pick.as_ref().map(|p| p.for_view);
+                    self.chrome.close_pick();
+                    match view {
+                        Some(view) => self.route(view, &Msg::Picked { view, choice: None }),
+                        None => vec![],
+                    }
+                }
+                _ => vec![],
+            };
+        }
         // 1. prompt captures everything while open
         if self.chrome.prompt.is_some() {
             return self.prompt_key(key);
@@ -310,16 +440,32 @@ impl App {
             KeyCode::Esc => {
                 return self.esc_cascade();
             }
-            KeyCode::Char(c @ '0'..='9') => {
+            KeyCode::Char(c @ '0'..='9')
+                if !self.top_view().is_some_and(|v| v.handles_digits()) =>
+            {
                 return self.favorite_key(c);
             }
             _ => {}
         }
         // 3. resource actions handled at app level (need the target + stack push)
-        if matches!(key.code, KeyCode::Char('d') | KeyCode::Char('y')) {
+        if matches!(
+            key.code,
+            KeyCode::Char('d')
+                | KeyCode::Char('y')
+                | KeyCode::Char('l')
+                | KeyCode::Char('L')
+                | KeyCode::Enter
+        ) {
             let target = self.views.last().and_then(|v| v.target());
             if let Some(t) = target {
-                return self.open_text_view(&t, key.code == KeyCode::Char('d'));
+                match key.code {
+                    KeyCode::Char('d') => return self.open_text_view(&t, true),
+                    KeyCode::Char('y') => return self.open_text_view(&t, false),
+                    KeyCode::Char('l') => return self.open_logs(&t, false),
+                    KeyCode::Char('L') => return self.open_logs(&t, true),
+                    KeyCode::Enter => return self.open_enter(&t),
+                    _ => {}
+                }
             }
         }
         // 4. top view
@@ -461,14 +607,38 @@ impl App {
                     vec![]
                 }
             },
+            "events" | "ev" => {
+                let ns = self.ctx().namespace;
+                let view = Box::new(crate::views::events::EventsView::new(self, ns));
+                self.replace_views(vec![view])
+            }
+            "metrics" | "top" => {
+                let view = Box::new(crate::views::metrics::MetricsView::new(self));
+                self.replace_views(vec![view])
+            }
             _ => {
                 // `<kind|alias> [namespace]` — replace the stack
                 let ns = arg.map(String::from);
                 if ns.is_some() {
                     self.set_namespace(ns.clone());
                 }
-                match crate::views::resources::open(self, head, None) {
-                    Some(view) => self.replace_views(vec![view]),
+                let kinds = self.ctx().kinds;
+                match kxs_cluster::command::resolve_kind(&kinds, head) {
+                    Some(kind) if kind.kind == "Pod" && kind.group.is_empty() => {
+                        let view = Box::new(crate::views::pods::PodsView::new(
+                            self,
+                            self.ctx().namespace,
+                        ));
+                        self.replace_views(vec![view])
+                    }
+                    Some(_) => match crate::views::resources::open(self, head, None) {
+                        Some(view) => self.replace_views(vec![view]),
+                        None => {
+                            self.chrome
+                                .flash(format!("unknown command or kind: {head}"), true);
+                            vec![]
+                        }
+                    },
                     None => {
                         self.chrome
                             .flash(format!("unknown command or kind: {head}"), true);
@@ -477,6 +647,78 @@ impl App {
                 }
             }
         }
+    }
+
+    /// `l` on a Pod (logs, with container picker when several) or on a pod
+    /// owner (all pods of the workload).
+    fn open_logs(&mut self, target: &crate::view::Target, all_containers: bool) -> Vec<Cmd> {
+        let is_pod = target.kind.kind == "Pod";
+        let view: Box<dyn View> = if is_pod {
+            if let Some(container) = &target.container {
+                let mut t = target.clone();
+                t.container = Some(container.clone());
+                Box::new(crate::views::logs::LogsView::new_with_container(self, t))
+            } else {
+                Box::new(crate::views::logs::LogsView::new(
+                    self,
+                    target.clone(),
+                    all_containers,
+                ))
+            }
+        } else if kxs_cluster::kinds::is_pod_owner(&target.kind.kind) {
+            Box::new(crate::views::logs::LogsView::new_workload(
+                self,
+                target.clone(),
+            ))
+        } else {
+            self.chrome.flash(
+                format!("logs not available for {}", target.kind.kind),
+                false,
+            );
+            return vec![];
+        };
+        self.push_view(view)
+    }
+
+    /// Enter on a Pod → Containers; on a pod owner / CronJob → Pods view
+    /// filtered by the workload's selector.
+    fn open_enter(&mut self, target: &crate::view::Target) -> Vec<Cmd> {
+        if target.kind.kind == "Pod" {
+            let view = Box::new(crate::views::containers::ContainersView::new(
+                self,
+                target.clone(),
+            ));
+            let mut cmds = self.push_view(view);
+            if let Some(id) = self.views.last().map(|v| v.id()) {
+                cmds.push(Cmd::Fetch {
+                    view: id,
+                    what: crate::cmd::Fetch::Containers {
+                        ns: target.ns.clone().unwrap_or_default(),
+                        pod: target.name.clone(),
+                    },
+                });
+            }
+            return cmds;
+        }
+        if kxs_cluster::kinds::views_pods(&target.kind.kind) {
+            let ns = target.ns.clone();
+            let view = Box::new(crate::views::pods::PodsView::new_with_pending_selector(
+                self, ns,
+            ));
+            let mut cmds = self.push_view(view);
+            if let Some(id) = self.views.last().map(|v| v.id()) {
+                cmds.push(Cmd::Fetch {
+                    view: id,
+                    what: crate::cmd::Fetch::WorkloadSelector {
+                        kind: target.kind.clone(),
+                        ns: target.ns.clone().unwrap_or_default(),
+                        name: target.name.clone(),
+                    },
+                });
+            }
+            return cmds;
+        }
+        vec![]
     }
 
     fn quit_cmds(&mut self) -> Vec<Cmd> {
@@ -556,6 +798,10 @@ impl App {
 
         let crumbs: Vec<String> = self.views.iter().map(|v| v.crumb()).collect();
         self.chrome.render_footer(f, footer, &self.theme, &crumbs);
+
+        if self.chrome.pick.is_some() {
+            self.chrome.render_pick(f, f.area(), &self.theme);
+        }
     }
 
     pub fn body_area(&self, full: Rect) -> Rect {

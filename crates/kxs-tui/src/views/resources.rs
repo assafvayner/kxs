@@ -148,6 +148,7 @@ impl ResourcesView {
             kind: self.kind.clone(),
             ns: self.watched_ns.clone(),
             name: r.name.clone(),
+            container: None,
         }
     }
 
