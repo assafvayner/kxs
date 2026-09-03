@@ -357,30 +357,40 @@ pub fn write_daemonset(w: &mut Writer, ds: &DaemonSet, pods: &[Pod]) {
         .and_then(|p| p.node_selector.as_ref());
     w.kv(0, "Node-Selector", format_labels(node_selector));
     write_labels_annotations(w, meta);
-    w.kv(
+    w.text(
         0,
-        "Desired Number of Nodes Scheduled",
-        status.map(|s| s.desired_number_scheduled).unwrap_or(0),
+        &format!(
+            "Desired Number of Nodes Scheduled: {}",
+            status.map(|s| s.desired_number_scheduled).unwrap_or(0)
+        ),
     );
-    w.kv(
+    w.text(
         0,
-        "Current Number of Nodes Scheduled",
-        status.map(|s| s.current_number_scheduled).unwrap_or(0),
+        &format!(
+            "Current Number of Nodes Scheduled: {}",
+            status.map(|s| s.current_number_scheduled).unwrap_or(0)
+        ),
     );
-    w.kv(
+    w.text(
         0,
-        "Number of Nodes Scheduled with Up-to-date Pods",
-        status.and_then(|s| s.updated_number_scheduled).unwrap_or(0),
+        &format!(
+            "Number of Nodes Scheduled with Up-to-date Pods: {}",
+            status.and_then(|s| s.updated_number_scheduled).unwrap_or(0)
+        ),
     );
-    w.kv(
+    w.text(
         0,
-        "Number of Nodes Scheduled with Available Pods",
-        status.and_then(|s| s.number_available).unwrap_or(0),
+        &format!(
+            "Number of Nodes Scheduled with Available Pods: {}",
+            status.and_then(|s| s.number_available).unwrap_or(0)
+        ),
     );
-    w.kv(
+    w.text(
         0,
-        "Number of Nodes Misscheduled",
-        status.map(|s| s.number_misscheduled).unwrap_or(0),
+        &format!(
+            "Number of Nodes Misscheduled: {}",
+            status.map(|s| s.number_misscheduled).unwrap_or(0)
+        ),
     );
     w.kv(0, "Pods Status", pods_status(pods, meta.uid.as_deref()));
     if let Some(s) = spec {

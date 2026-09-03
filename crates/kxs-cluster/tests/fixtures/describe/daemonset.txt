@@ -4,11 +4,11 @@ Selector:  app=agent
 Node-Selector:  kubernetes.io/os=linux
 Labels:  app=agent
 Annotations:  <none>
-Desired Number of Nodes Scheduled:  3
-Current Number of Nodes Scheduled:  3
-Number of Nodes Scheduled with Up-to-date Pods:  3
-Number of Nodes Scheduled with Available Pods:  3
-Number of Nodes Misscheduled:  0
+Desired Number of Nodes Scheduled: 3
+Current Number of Nodes Scheduled: 3
+Number of Nodes Scheduled with Up-to-date Pods: 3
+Number of Nodes Scheduled with Available Pods: 3
+Number of Nodes Misscheduled: 0
 Pods Status:  0 Running / 0 Waiting / 0 Succeeded / 0 Failed
 Pod Template:
   Labels:  app=agent

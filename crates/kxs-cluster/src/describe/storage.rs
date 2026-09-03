@@ -150,11 +150,11 @@ pub fn write_pv(w: &mut Writer, pv: &PersistentVolume, now_ms: i64) {
         .and_then(|spec| spec.node_affinity.as_ref())
         .and_then(|affinity| affinity.required.as_ref())
     {
-        w.section(0, "Node Affinity");
+        w.kv(0, "Node Affinity", "");
         if required.node_selector_terms.is_empty() {
             w.kv(1, "Required Terms", NONE);
         } else {
-            w.section(1, "Required Terms");
+            w.kv(1, "Required Terms", "");
         }
         for (index, term) in required.node_selector_terms.iter().enumerate() {
             let expressions: Vec<String> = term
@@ -606,7 +606,7 @@ mod tests {
         })));
         assert_eq!(
             block(&multiple, "Node Affinity", "Message:"),
-            "Node Affinity:\n  Required Terms:\n    Term 0:  disk in [ssd, nvme]\n             rack notin [one]\n             dedicated exists\n"
+            "Node Affinity:\n  Required Terms:\n    Term 0:  disk in [ssd, nvme]\n                   rack notin [one]\n                   dedicated exists\n"
         );
     }
 
