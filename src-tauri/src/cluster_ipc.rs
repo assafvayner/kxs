@@ -388,24 +388,6 @@ pub async fn get_openapi_schema(
     Ok(doc.map(|d| d.to_string()))
 }
 
-#[tauri::command]
-pub async fn get_resource_events(
-    tab_id: u32,
-    namespace: Option<String>,
-    kind: String,
-    name: String,
-    sessions: State<'_, Sessions>,
-) -> Result<Vec<kxs_cluster::resources::ResourceEvent>, String> {
-    let session = session_of(&sessions, tab_id).await?;
-    Ok(kxs_cluster::resources::get_events(
-        session.client.clone(),
-        namespace.as_deref(),
-        &kind,
-        &name,
-    )
-    .await)
-}
-
 /// kubectl-style describe text for one object.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]

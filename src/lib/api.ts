@@ -147,16 +147,6 @@ export interface ResourceTable {
 export type ResourceTableEvent =
   | { type: "table"; table: ResourceTable }
   | { type: "status"; state: string; message: string | null };
-export interface ResourceEvent {
-  type: string;
-  reason: string;
-  message: string;
-  count: number;
-  lastSeen: string | null;
-  firstSeen: string | null;
-  source: string;
-}
-
 export type ExecEvent =
   | { type: "output"; data: string }
   | { type: "closed"; message: string | null };
@@ -301,8 +291,6 @@ export const api = {
   /// Raw OpenAPI v3 document for a group/version, or null when the cluster publishes none.
   getOpenApiSchema: (tabId: number, group: string, version: string) =>
     invoke<string | null>("get_openapi_schema", { tabId, group, version }),
-  getResourceEvents: (tabId: number, namespace: string | null, kind: string, name: string) =>
-    invoke<ResourceEvent[]>("get_resource_events", { tabId, namespace, kind, name }),
   describeResource: (tabId: number, k: ResourceKind, namespace: string | null, name: string) =>
     invoke<string>("describe_resource", {
       tabId,

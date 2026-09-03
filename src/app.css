@@ -170,8 +170,6 @@ body.col-resizing, body.col-resizing * { cursor: col-resize; }
 .code-editor .cm-editor { flex: 1; min-height: 0; }
 .apply-err { color: var(--red); background: var(--error-bg); margin: 0; padding: 8px 16px; max-height: 30%; overflow: auto; white-space: pre-wrap; }
 .chk { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-dim); font-size: 13px; }
-.events-h { margin: 16px 0 8px; font-size: 13px; color: var(--accent); }
-table.events td, table.events th { font-size: 12px; }
 .pod-row:not(.pod-head) { cursor: pointer; }
 .pod-row:not(.pod-head):hover { background: var(--bg-hover); }
 .pod-row.selected { background: var(--bg-active); }

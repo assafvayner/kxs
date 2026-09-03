@@ -45,7 +45,6 @@ fn main() {
             cluster_ipc::stop_resource_table,
             cluster_ipc::get_resource_yaml,
             cluster_ipc::get_openapi_schema,
-            cluster_ipc::get_resource_events,
             cluster_ipc::describe_resource,
             cluster_ipc::apply_resource_yaml,
             cluster_ipc::delete_resource,
