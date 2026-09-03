@@ -47,6 +47,11 @@ pub enum Msg {
         view: ViewId,
         result: Result<FetchResult, String>,
     },
+    Mutated {
+        view: ViewId,
+        m: crate::cmd::Mutation,
+        result: Result<Option<String>, String>,
+    },
     /// Resolution of a Chrome pick modal; `None` = cancelled.
     Picked {
         view: ViewId,

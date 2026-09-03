@@ -156,18 +156,9 @@ impl View for Pager {
 
     fn hints(&self) -> Vec<Hint> {
         vec![
-            Hint {
-                key: "/",
-                desc: "search",
-            },
-            Hint {
-                key: "n/N",
-                desc: "next/prev match",
-            },
-            Hint {
-                key: "c",
-                desc: "copy",
-            },
+            Hint::action("/", "search"),
+            Hint::action("n/N", "next/prev match"),
+            Hint::action("c", "copy"),
         ]
     }
 

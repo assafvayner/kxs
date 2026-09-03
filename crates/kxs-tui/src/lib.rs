@@ -11,6 +11,7 @@ pub mod msg;
 pub mod runtime;
 pub mod select;
 pub mod sessions;
+pub mod suspend;
 pub mod terminal;
 pub mod theme;
 pub mod view;

@@ -11,6 +11,26 @@ pub type ViewId = u64;
 pub struct Hint {
     pub key: &'static str,
     pub desc: &'static str,
+    /// Hidden when `--readonly` is active.
+    pub mutating: bool,
+}
+
+impl Hint {
+    pub fn action(key: &'static str, desc: &'static str) -> Self {
+        Hint {
+            key,
+            desc,
+            mutating: false,
+        }
+    }
+
+    pub fn mutation(key: &'static str, desc: &'static str) -> Self {
+        Hint {
+            key,
+            desc,
+            mutating: true,
+        }
+    }
 }
 
 /// The resource row a view's keys act on (used by the app for `d`/`y`/`e`).
@@ -21,6 +41,11 @@ pub struct Target {
     pub name: String,
     /// Selected container, when the view is scoped to one.
     pub container: Option<String>,
+    /// Current desired replicas (Resources READY cell "2/2" → 2), for the
+    /// scale input prefill.
+    pub desired_replicas: Option<i32>,
+    /// SUSPEND column value for CronJob rows.
+    pub suspend: Option<bool>,
 }
 
 pub trait View {
@@ -56,6 +81,11 @@ pub trait View {
     /// The selected resource row, if this view is a resource listing.
     fn target(&self) -> Option<Target> {
         None
+    }
+    /// Whether the app should intercept Enter for this view's target
+    /// (drill-down). Views with their own Enter semantics opt out.
+    fn wants_enter(&self) -> bool {
+        false
     }
     /// Views like Logs consume `0`-`5` for their own presets, overriding the
     /// global namespace favorites while they are the top view.

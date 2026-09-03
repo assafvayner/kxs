@@ -10,8 +10,10 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use tui_input::{Input, InputRequest};
 
+use crate::cmd::Mutation;
 use crate::theme::Theme;
 use crate::view::{Hint, ViewId};
+use kxs_cluster::discovery::ResourceKind;
 
 pub const FLASH_DURATION: Duration = Duration::from_secs(5);
 
@@ -44,13 +46,51 @@ pub struct Flash {
 }
 
 /// A centered options picker; the choice is routed back to `for_view` as
-/// `Msg::Picked` (Phase 4 grows this into confirm/input modals).
+/// `Msg::Picked`.
 pub struct PickModal {
     pub title: String,
     pub options: Vec<(String, String)>,
     pub selected: usize,
     pub for_view: ViewId,
 }
+
+/// y/N confirmation for a mutation.
+pub struct ConfirmModal {
+    pub title: String,
+    pub detail: String,
+    pub for_view: ViewId,
+    pub action: Mutation,
+}
+
+/// Text input for a mutation parameter (scale replicas).
+pub struct InputModal {
+    pub title: String,
+    pub value: String,
+    pub for_view: ViewId,
+    pub action: InputAction,
+}
+
+#[derive(Clone)]
+pub enum InputAction {
+    Scale {
+        kind: ResourceKind,
+        ns: String,
+        name: String,
+    },
+}
+
+/// kubectl-style delete dialog: propagation policy + force toggle.
+pub struct DeleteModal {
+    pub title: String,
+    pub for_view: ViewId,
+    pub kind: ResourceKind,
+    pub ns: String,
+    pub name: String,
+    pub propagation_idx: usize,
+    pub force: bool,
+}
+
+pub const PROPAGATIONS: [&str; 3] = ["Background", "Foreground", "Orphan"];
 
 /// Chrome owns everything that is not a body view: header data, the `:`/`/`
 /// prompt, flash messages, and (later phases) modals.
@@ -67,6 +107,9 @@ pub struct Chrome {
     /// "12% / 43%" from the metrics poll; hidden until the first result.
     pub cpu_mem: Option<String>,
     pub pick: Option<PickModal>,
+    pub confirm: Option<ConfirmModal>,
+    pub input: Option<InputModal>,
+    pub delete: Option<DeleteModal>,
     pub prompt: Option<Prompt>,
     pub flash: Option<Flash>,
     pub size: (u16, u16),
@@ -132,6 +175,117 @@ impl Chrome {
             }
             KeyCode::Esc => PickOutcome::Cancel,
             _ => PickOutcome::Ignored,
+        }
+    }
+
+    pub fn open_confirm(
+        &mut self,
+        title: String,
+        detail: String,
+        for_view: ViewId,
+        action: Mutation,
+    ) {
+        self.confirm = Some(ConfirmModal {
+            title,
+            detail,
+            for_view,
+            action,
+        });
+    }
+
+    pub fn open_input(
+        &mut self,
+        title: String,
+        prefill: String,
+        for_view: ViewId,
+        action: InputAction,
+    ) {
+        self.input = Some(InputModal {
+            title,
+            value: prefill,
+            for_view,
+            action,
+        });
+    }
+
+    pub fn open_delete(
+        &mut self,
+        title: String,
+        for_view: ViewId,
+        kind: ResourceKind,
+        ns: String,
+        name: String,
+    ) {
+        self.delete = Some(DeleteModal {
+            title,
+            for_view,
+            kind,
+            ns,
+            name,
+            propagation_idx: 0,
+            force: false,
+        });
+    }
+
+    pub fn close_all_modals(&mut self) {
+        self.pick = None;
+        self.confirm = None;
+        self.input = None;
+        self.delete = None;
+    }
+
+    pub fn confirm_key(&mut self, key: KeyEvent) -> ConfirmOutcome {
+        let Some(confirm) = &self.confirm else {
+            return ConfirmOutcome::Ignored;
+        };
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                ConfirmOutcome::Confirmed(Box::new(confirm.action.clone()))
+            }
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => ConfirmOutcome::Cancelled,
+            _ => ConfirmOutcome::Ignored,
+        }
+    }
+
+    pub fn input_key(&mut self, key: KeyEvent) -> InputOutcome {
+        let Some(input) = &mut self.input else {
+            return InputOutcome::Ignored;
+        };
+        match key.code {
+            KeyCode::Enter => InputOutcome::Submitted(input.value.clone()),
+            KeyCode::Esc => InputOutcome::Cancelled,
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                input.value.push(c);
+                InputOutcome::Edited
+            }
+            KeyCode::Backspace => {
+                input.value.pop();
+                InputOutcome::Edited
+            }
+            _ => InputOutcome::Ignored,
+        }
+    }
+
+    pub fn delete_key(&mut self, key: KeyEvent) -> DeleteOutcome {
+        let Some(dm) = &mut self.delete else {
+            return DeleteOutcome::Ignored;
+        };
+        match key.code {
+            KeyCode::Left | KeyCode::Char('h') => {
+                dm.propagation_idx = dm.propagation_idx.saturating_sub(1);
+                DeleteOutcome::Edited
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                dm.propagation_idx = (dm.propagation_idx + 1).min(PROPAGATIONS.len() - 1);
+                DeleteOutcome::Edited
+            }
+            KeyCode::Char('f') => {
+                dm.force = !dm.force;
+                DeleteOutcome::Edited
+            }
+            KeyCode::Enter => DeleteOutcome::Confirmed,
+            KeyCode::Esc => DeleteOutcome::Cancelled,
+            _ => DeleteOutcome::Ignored,
         }
     }
 
@@ -380,6 +534,122 @@ impl Chrome {
         f.render_widget(list, modal);
     }
 
+    fn modal_frame(&self, area: Rect, width: u16, height: u16) -> Rect {
+        let width = width.clamp(30, area.width);
+        let height = height.min(area.height);
+        Rect {
+            x: area.x + (area.width.saturating_sub(width)) / 2,
+            y: area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        }
+    }
+
+    pub fn render_confirm(&self, f: &mut Frame, area: Rect, th: &Theme) {
+        use ratatui::widgets::{Clear, Paragraph};
+        let Some(c) = &self.confirm else { return };
+        let modal = self.modal_frame(area, 50, 5);
+        f.render_widget(Clear, modal);
+        let text = vec![
+            Line::from(Span::styled(
+                c.title.clone(),
+                Style::new().fg(th.colors.accent).bold(),
+            )),
+            Line::from(Span::styled(
+                c.detail.clone(),
+                Style::new().fg(th.colors.fg),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "y confirm · n/Esc cancel",
+                Style::new().fg(th.colors.fg_dim),
+            )),
+        ];
+        f.render_widget(
+            Paragraph::new(text).block(
+                ratatui::widgets::Block::new()
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .border_style(Style::new().fg(th.colors.red)),
+            ),
+            modal,
+        );
+    }
+
+    pub fn render_input(&self, f: &mut Frame, area: Rect, th: &Theme) {
+        use ratatui::widgets::{Clear, Paragraph};
+        let Some(m) = &self.input else { return };
+        let modal = self.modal_frame(area, 44, 5);
+        f.render_widget(Clear, modal);
+        let text = vec![
+            Line::from(Span::styled(
+                m.title.clone(),
+                Style::new().fg(th.colors.accent).bold(),
+            )),
+            Line::from(Span::styled(
+                format!("{}█", m.value),
+                Style::new().fg(th.colors.fg),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Enter confirm · Esc cancel",
+                Style::new().fg(th.colors.fg_dim),
+            )),
+        ];
+        f.render_widget(
+            Paragraph::new(text).block(
+                ratatui::widgets::Block::new()
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .border_style(Style::new().fg(th.colors.accent)),
+            ),
+            modal,
+        );
+    }
+
+    pub fn render_delete(&self, f: &mut Frame, area: Rect, th: &Theme) {
+        use ratatui::widgets::{Clear, Paragraph};
+        let Some(dm) = &self.delete else { return };
+        let modal = self.modal_frame(area, 56, 7);
+        f.render_widget(Clear, modal);
+        let props: Vec<String> = PROPAGATIONS
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if i == dm.propagation_idx {
+                    format!("[{p}]")
+                } else {
+                    p.to_string()
+                }
+            })
+            .collect();
+        let text = vec![
+            Line::from(Span::styled(
+                dm.title.clone(),
+                Style::new().fg(th.colors.red).bold(),
+            )),
+            Line::from(Span::styled(
+                format!("propagation: {}", props.join("  ")),
+                Style::new().fg(th.colors.fg),
+            )),
+            Line::from(Span::styled(
+                format!("force: {}", if dm.force { "[x]" } else { "[ ]" }),
+                Style::new().fg(th.colors.fg),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "←/→ propagation · f force · Enter delete · Esc cancel",
+                Style::new().fg(th.colors.fg_dim),
+            )),
+        ];
+        f.render_widget(
+            Paragraph::new(text).block(
+                ratatui::widgets::Block::new()
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .border_style(Style::new().fg(th.colors.red)),
+            ),
+            modal,
+        );
+    }
+
     pub fn render_footer(&self, f: &mut Frame, area: Rect, th: &Theme, crumbs: &[String]) {
         let label = Style::new().fg(th.colors.fg_dim);
         let mut spans: Vec<Span> = Vec::new();
@@ -454,6 +724,26 @@ pub enum PickOutcome {
     Chose(Option<String>),
     /// Esc: cancel.
     Cancel,
+    Edited,
+    Ignored,
+}
+
+pub enum ConfirmOutcome {
+    Confirmed(Box<Mutation>),
+    Cancelled,
+    Ignored,
+}
+
+pub enum InputOutcome {
+    Submitted(String),
+    Cancelled,
+    Edited,
+    Ignored,
+}
+
+pub enum DeleteOutcome {
+    Confirmed,
+    Cancelled,
     Edited,
     Ignored,
 }

@@ -57,16 +57,7 @@ impl View for ContainersView {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        vec![
-            Hint {
-                key: "l",
-                desc: "logs",
-            },
-            Hint {
-                key: "s",
-                desc: "shell*",
-            },
-        ]
+        vec![Hint::action("l", "logs"), Hint::action("s", "shell*")]
     }
 
     fn handle_key(&mut self, key: KeyEvent, _ctx: &AppCtx) -> Vec<Cmd> {

@@ -45,10 +45,7 @@ impl View for NamespacesView {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        vec![Hint {
-            key: "enter",
-            desc: "switch",
-        }]
+        vec![Hint::action("enter", "switch")]
     }
 
     fn handle_key(&mut self, key: KeyEvent, _ctx: &AppCtx) -> Vec<Cmd> {

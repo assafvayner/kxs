@@ -323,26 +323,11 @@ impl View for PodsView {
 
     fn hints(&self) -> Vec<Hint> {
         vec![
-            Hint {
-                key: "enter",
-                desc: "containers",
-            },
-            Hint {
-                key: "l",
-                desc: "logs",
-            },
-            Hint {
-                key: "shift-l",
-                desc: "logs all",
-            },
-            Hint {
-                key: "d",
-                desc: "describe",
-            },
-            Hint {
-                key: "y",
-                desc: "yaml",
-            },
+            Hint::action("enter", "containers"),
+            Hint::action("l", "logs"),
+            Hint::action("shift-l", "logs all"),
+            Hint::action("d", "describe"),
+            Hint::action("y", "yaml"),
         ]
     }
 
@@ -510,6 +495,10 @@ impl View for PodsView {
         self.stop_old()
     }
 
+    fn wants_enter(&self) -> bool {
+        true
+    }
+
     fn target(&self) -> Option<Target> {
         let row = self
             .rows
@@ -520,6 +509,8 @@ impl View for PodsView {
             ns: Some(row.namespace.clone()),
             name: row.name.clone(),
             container: None,
+            desired_replicas: None,
+            suspend: None,
         })
     }
 

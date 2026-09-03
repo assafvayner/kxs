@@ -37,6 +37,13 @@ pub fn install_panic_hook() {
     }));
 }
 
+/// Forces a full redraw on the next draw (used after a suspend round-trip).
+pub fn clear_frame(
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+) -> Result<(), String> {
+    terminal.clear().map_err(|e| format!("clear: {e}"))
+}
+
 /// Restores the terminal when dropped, on every exit path through `main`.
 pub struct RestoreGuard;
 

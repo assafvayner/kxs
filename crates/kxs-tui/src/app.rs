@@ -147,6 +147,16 @@ impl App {
         self.sync_chrome();
     }
 
+    /// Confirm-and-undo dialog from the Rollout view.
+    pub fn open_confirm_undo(&mut self, view: ViewId, ns: String, name: String, revision: i64) {
+        self.chrome.open_confirm(
+            format!("Undo {name} to revision {revision}?"),
+            format!("{name} will roll back to revision {revision}"),
+            view,
+            crate::cmd::Mutation::Undo { ns, name, revision },
+        );
+    }
+
     /// Open the Chrome container picker; the choice routes back to `view`.
     pub fn open_container_pick(
         &mut self,
@@ -238,6 +248,18 @@ impl App {
                     return vec![];
                 }
                 self.route(view, &Msg::Metrics { view, pods, nodes })
+            }
+            Msg::Mutated { view, m, result } => {
+                if !self.on_stack(view) {
+                    return vec![];
+                }
+                match &result {
+                    Ok(Some(text)) => self.chrome.flash(text.clone(), false),
+                    Ok(None) => {}
+                    Err(e) => self.chrome.flash(e.clone(), true),
+                }
+                let _ = m;
+                vec![]
             }
             Msg::Picked { view, choice } => {
                 if !self.on_stack(view) {
@@ -392,6 +414,88 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Vec<Cmd> {
+        // -1. mutation modals capture everything while open
+        if self.chrome.confirm.is_some() {
+            return match self.chrome.confirm_key(key) {
+                crate::chrome::ConfirmOutcome::Confirmed(action) => {
+                    let view = self.chrome.confirm.as_ref().map(|c| c.for_view);
+                    self.chrome.close_all_modals();
+                    match view {
+                        Some(view) => vec![Cmd::Mutate { view, m: *action }],
+                        None => vec![],
+                    }
+                }
+                crate::chrome::ConfirmOutcome::Cancelled => {
+                    self.chrome.close_all_modals();
+                    vec![]
+                }
+                _ => vec![],
+            };
+        }
+        if self.chrome.input.is_some() {
+            return match self.chrome.input_key(key) {
+                crate::chrome::InputOutcome::Submitted(value) => {
+                    let submitted = self
+                        .chrome
+                        .input
+                        .as_ref()
+                        .map(|i| (i.for_view, i.action.clone()));
+                    self.chrome.close_all_modals();
+                    match submitted {
+                        Some((view, crate::chrome::InputAction::Scale { kind, ns, name })) => {
+                            match value.trim().parse::<i32>() {
+                                Ok(replicas) => vec![Cmd::Mutate {
+                                    view,
+                                    m: crate::cmd::Mutation::Scale {
+                                        kind,
+                                        ns,
+                                        name,
+                                        replicas,
+                                    },
+                                }],
+                                Err(_) => {
+                                    self.chrome.flash("replicas must be a number", true);
+                                    vec![]
+                                }
+                            }
+                        }
+                        None => vec![],
+                    }
+                }
+                crate::chrome::InputOutcome::Cancelled => {
+                    self.chrome.close_all_modals();
+                    vec![]
+                }
+                _ => vec![],
+            };
+        }
+        if self.chrome.delete.is_some() {
+            return match self.chrome.delete_key(key) {
+                crate::chrome::DeleteOutcome::Confirmed => {
+                    let dm = self.chrome.delete.take();
+                    match dm {
+                        Some(dm) => vec![Cmd::Mutate {
+                            view: dm.for_view,
+                            m: crate::cmd::Mutation::Delete {
+                                kind: dm.kind,
+                                ns: dm.ns,
+                                name: dm.name,
+                                propagation: Some(
+                                    crate::chrome::PROPAGATIONS[dm.propagation_idx].to_string(),
+                                ),
+                                force: dm.force,
+                            },
+                        }],
+                        None => vec![],
+                    }
+                }
+                crate::chrome::DeleteOutcome::Cancelled => {
+                    self.chrome.close_all_modals();
+                    vec![]
+                }
+                _ => vec![],
+            };
+        }
         // 0. pick modal captures everything while open
         if self.chrome.pick.is_some() {
             return match self.chrome.pick_key(key) {
@@ -448,6 +552,8 @@ impl App {
             _ => {}
         }
         // 3. resource actions handled at app level (need the target + stack push)
+        let ctrl_d =
+            key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL);
         if matches!(
             key.code,
             KeyCode::Char('d')
@@ -455,16 +561,47 @@ impl App {
                 | KeyCode::Char('l')
                 | KeyCode::Char('L')
                 | KeyCode::Enter
-        ) {
+                | KeyCode::Char('e')
+                | KeyCode::Char('s')
+                | KeyCode::Char('r')
+                | KeyCode::Char('c')
+                | KeyCode::Char('u')
+                | KeyCode::Char('t')
+                | KeyCode::Char('S')
+                | KeyCode::Char('h')
+        ) || ctrl_d
+        {
+            let enter_wanted = self.views.last().is_some_and(|v| v.wants_enter());
             let target = self.views.last().and_then(|v| v.target());
             if let Some(t) = target {
                 match key.code {
-                    KeyCode::Char('d') => return self.open_text_view(&t, true),
+                    KeyCode::Enter if !enter_wanted => {}
+                    KeyCode::Char('d') if !ctrl_d => return self.open_text_view(&t, true),
                     KeyCode::Char('y') => return self.open_text_view(&t, false),
                     KeyCode::Char('l') => return self.open_logs(&t, false),
                     KeyCode::Char('L') => return self.open_logs(&t, true),
                     KeyCode::Enter => return self.open_enter(&t),
-                    _ => {}
+                    KeyCode::Char('h') if kxs_cluster::kinds::is_restartable(&t.kind.kind) => {
+                        let view =
+                            Box::new(crate::views::rollout::RolloutView::new(self, t.clone()));
+                        let mut cmds = self.push_view(view);
+                        if let Some(id) = self.views.last().map(|v| v.id()) {
+                            cmds.push(Cmd::Fetch {
+                                view: id,
+                                what: crate::cmd::Fetch::RolloutHistory {
+                                    ns: t.ns.clone().unwrap_or_default(),
+                                    name: t.name.clone(),
+                                },
+                            });
+                        }
+                        return cmds;
+                    }
+                    _ => {
+                        // mutating keys — guarded by readonly
+                        if let Some(cmds) = self.mutation_key(key, &t) {
+                            return cmds;
+                        }
+                    }
                 }
             }
         }
@@ -649,6 +786,190 @@ impl App {
         }
     }
 
+    /// Mutating keys; `None` = not a mutation key (fall through to the view).
+    /// Refuses with a flash when readonly.
+    fn mutation_key(&mut self, key: KeyEvent, t: &crate::view::Target) -> Option<Vec<Cmd>> {
+        let readonly = self.ctx().readonly;
+        let view = self.views.last().map(|v| v.id());
+        let refuse = |app: &mut Self, what: &str| {
+            if readonly {
+                app.chrome.flash(format!("readonly: {what} disabled"), true);
+                Some(vec![])
+            } else {
+                None
+            }
+        };
+        match (
+            key.code,
+            key.modifiers.contains(KeyModifiers::CONTROL),
+            t.kind.kind.as_str(),
+        ) {
+            (KeyCode::Char('e'), _, _) => {
+                if let Some(out) = refuse(self, "edit") {
+                    return Some(out);
+                }
+                Some(vec![Cmd::Suspend(crate::cmd::SuspendAction::Edit {
+                    kind: t.kind.clone(),
+                    ns: t.ns.clone(),
+                    name: t.name.clone(),
+                })])
+            }
+            (KeyCode::Char('s'), _, _) if kxs_cluster::kinds::is_scalable(&t.kind.kind) => {
+                if let Some(out) = refuse(self, "scale") {
+                    return Some(out);
+                }
+                if let Some(view) = view {
+                    self.chrome.open_input(
+                        format!("Scale {} to replicas:", t.name),
+                        t.desired_replicas
+                            .map(|r| r.to_string())
+                            .unwrap_or_default(),
+                        view,
+                        crate::chrome::InputAction::Scale {
+                            kind: t.kind.clone(),
+                            ns: t.ns.clone().unwrap_or_default(),
+                            name: t.name.clone(),
+                        },
+                    );
+                }
+                Some(vec![])
+            }
+            (KeyCode::Char('r'), _, _) if kxs_cluster::kinds::is_restartable(&t.kind.kind) => {
+                if let Some(out) = refuse(self, "restart") {
+                    return Some(out);
+                }
+                if let Some(view) = view {
+                    self.chrome.open_confirm(
+                        format!("Restart {}?", t.name),
+                        format!("A rolling restart of {} will be performed", t.name),
+                        view,
+                        crate::cmd::Mutation::Restart {
+                            kind: t.kind.clone(),
+                            ns: t.ns.clone().unwrap_or_default(),
+                            name: t.name.clone(),
+                        },
+                    );
+                }
+                Some(vec![])
+            }
+            (KeyCode::Char('r'), _, "Node") => {
+                if let Some(out) = refuse(self, "drain") {
+                    return Some(out);
+                }
+                if let Some(view) = view {
+                    self.chrome.open_confirm(
+                        format!("Drain {}?", t.name),
+                        "Pods will be evicted from this node".into(),
+                        view,
+                        crate::cmd::Mutation::Drain {
+                            ns: t.ns.clone().unwrap_or_default(),
+                            name: t.name.clone(),
+                        },
+                    );
+                }
+                Some(vec![])
+            }
+            (KeyCode::Char('c'), _, "Node") => {
+                if let Some(out) = refuse(self, "cordon") {
+                    return Some(out);
+                }
+                view.map(|view| {
+                    vec![Cmd::Mutate {
+                        view,
+                        m: crate::cmd::Mutation::Cordon {
+                            ns: t.ns.clone().unwrap_or_default(),
+                            name: t.name.clone(),
+                            unschedulable: true,
+                        },
+                    }]
+                })
+            }
+            (KeyCode::Char('u'), _, "Node") => {
+                if let Some(out) = refuse(self, "uncordon") {
+                    return Some(out);
+                }
+                view.map(|view| {
+                    vec![Cmd::Mutate {
+                        view,
+                        m: crate::cmd::Mutation::Cordon {
+                            ns: t.ns.clone().unwrap_or_default(),
+                            name: t.name.clone(),
+                            unschedulable: false,
+                        },
+                    }]
+                })
+            }
+            (KeyCode::Char('t'), _, "CronJob") => {
+                if let Some(out) = refuse(self, "trigger") {
+                    return Some(out);
+                }
+                if let Some(view) = view {
+                    self.chrome.open_confirm(
+                        format!("Trigger {}?", t.name),
+                        "A Job will be created from the CronJob template".into(),
+                        view,
+                        crate::cmd::Mutation::Trigger {
+                            ns: t.ns.clone().unwrap_or_default(),
+                            name: t.name.clone(),
+                        },
+                    );
+                }
+                Some(vec![])
+            }
+            (KeyCode::Char('S'), _, "CronJob") => {
+                if let Some(out) = refuse(self, "suspend toggle") {
+                    return Some(out);
+                }
+                view.map(|view| {
+                    vec![Cmd::Mutate {
+                        view,
+                        m: crate::cmd::Mutation::Suspend {
+                            ns: t.ns.clone().unwrap_or_default(),
+                            name: t.name.clone(),
+                            suspend: !t.suspend.unwrap_or(false),
+                        },
+                    }]
+                })
+            }
+            (KeyCode::Char('d'), true, _) => {
+                if let Some(out) = refuse(self, "delete") {
+                    return Some(out);
+                }
+                if let Some(view) = view {
+                    self.chrome.open_delete(
+                        format!("Delete {} {}?", t.kind.kind, t.name),
+                        view,
+                        t.kind.clone(),
+                        t.ns.clone().unwrap_or_default(),
+                        t.name.clone(),
+                    );
+                }
+                Some(vec![])
+            }
+            (KeyCode::Char('k'), true, _) => {
+                if let Some(out) = refuse(self, "force delete") {
+                    return Some(out);
+                }
+                if let Some(view) = view {
+                    self.chrome.open_confirm(
+                        format!("Force delete {} {}?", t.kind.kind, t.name),
+                        "Grace period 0 (force); propagation Background".into(),
+                        view,
+                        crate::cmd::Mutation::Delete {
+                            kind: t.kind.clone(),
+                            ns: t.ns.clone().unwrap_or_default(),
+                            name: t.name.clone(),
+                            propagation: Some("Background".into()),
+                            force: true,
+                        },
+                    );
+                }
+                Some(vec![])
+            }
+            _ => None,
+        }
+    }
+
     /// `l` on a Pod (logs, with container picker when several) or on a pod
     /// owner (all pods of the workload).
     fn open_logs(&mut self, target: &crate::view::Target, all_containers: bool) -> Vec<Cmd> {
@@ -778,7 +1099,15 @@ impl App {
         ])
         .areas(f.area());
 
-        let hints = self.views.last().map(|v| v.hints()).unwrap_or_default();
+        let readonly = self.config.lock().map(|c| c.readonly).unwrap_or(false);
+        let hints: Vec<crate::view::Hint> = self
+            .views
+            .last()
+            .map(|v| v.hints())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|h| !readonly || !h.mutating)
+            .collect();
         self.chrome.render_header(f, header, &self.theme, &hints);
 
         // prompt replaces the title row; the view keeps the rest
@@ -801,6 +1130,15 @@ impl App {
 
         if self.chrome.pick.is_some() {
             self.chrome.render_pick(f, f.area(), &self.theme);
+        }
+        if self.chrome.confirm.is_some() {
+            self.chrome.render_confirm(f, f.area(), &self.theme);
+        }
+        if self.chrome.input.is_some() {
+            self.chrome.render_input(f, f.area(), &self.theme);
+        }
+        if self.chrome.delete.is_some() {
+            self.chrome.render_delete(f, f.area(), &self.theme);
         }
     }
 

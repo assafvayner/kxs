@@ -17,10 +17,12 @@ use kxs_cluster::resources::{get_yaml, run_table_watch};
 use kxs_cluster::session;
 
 use crate::app::App;
+use crate::cmd::SuspendAction;
 use crate::cmd::{Cmd, Fetch, FetchResult, StopHandle};
 use crate::config::{self, Config};
 use crate::msg::Msg;
 use crate::sessions::Shared;
+use crate::terminal;
 
 /// Connects one context: kubeconfig yaml → session → ping → discovery.
 /// On success the session, kinds, and namespace are recorded in `sessions`.
@@ -121,6 +123,9 @@ async fn fetch(sessions: &Shared, what: Fetch) -> Result<FetchResult, String> {
             )
             .await?,
         )),
+        Fetch::RolloutHistory { ns, name } => Ok(FetchResult::Rollout(
+            kxs_cluster::workloads::rollout_history(sess.client.clone(), &ns, &name).await?,
+        )),
     }
 }
 
@@ -169,7 +174,7 @@ impl Runtime {
         &mut self,
         app: &mut App,
         mut rx: mpsc::UnboundedReceiver<Msg>,
-        terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+        screen: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
         pre_cmds: Vec<Cmd>,
     ) -> Result<(), String> {
         self.spawn_event_pump();
@@ -178,7 +183,7 @@ impl Runtime {
                 return Ok(());
             }
         }
-        terminal
+        screen
             .draw(|f| app.render(f))
             .map_err(|e| format!("draw: {e}"))?;
         let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -191,11 +196,34 @@ impl Runtime {
                 _ = tick.tick() => Msg::Tick,
             };
             for cmd in app.update(msg) {
-                if self.execute(cmd, app).await? {
+                if let Cmd::Suspend(action) = cmd {
+                    // handled inline: leave raw mode, run on the real
+                    // terminal, restore, force a full redraw
+                    terminal::restore();
+                    let client = {
+                        let s = self.sessions.lock().expect("sessions lock");
+                        s.active_session().map(|sess| sess.client.clone())
+                    };
+                    let result = match client {
+                        Some(client) => match action {
+                            SuspendAction::Edit { .. } => {
+                                crate::suspend::run_edit(client, action).await
+                            }
+                        },
+                        None => Err("not connected".into()),
+                    };
+                    terminal::enter().ok();
+                    let _ = crate::terminal::clear_frame(screen);
+                    match result {
+                        Ok(Some(text)) => app.chrome.flash(text, false),
+                        Ok(None) => app.chrome.flash("no changes", false),
+                        Err(e) => app.chrome.flash(e, true),
+                    }
+                } else if self.execute(cmd, app).await? {
                     return Ok(());
                 }
             }
-            terminal
+            screen
                 .draw(|f| app.render(f))
                 .map_err(|e| format!("draw: {e}"))?;
         }
@@ -376,6 +404,7 @@ impl Runtime {
                 }));
                 Ok(false)
             }
+            Cmd::Suspend(_) => unreachable!("handled inline in run()"),
             Cmd::Fetch { view, what } => {
                 let tx = self.tx.clone();
                 let sessions = self.sessions.clone();
@@ -383,6 +412,34 @@ impl Runtime {
                     let result = fetch(&sessions, what).await;
                     let _ = tx.send(Msg::Fetched { view, result });
                 });
+                Ok(false)
+            }
+            Cmd::Mutate { view, m } => {
+                let client = {
+                    let s = self.sessions.lock().expect("sessions lock");
+                    s.active_session().map(|sess| sess.client.clone())
+                };
+                let Some(client) = client else {
+                    let _ = self.tx.send(Msg::Error {
+                        view: Some(view),
+                        text: "not connected".into(),
+                    });
+                    return Ok(false);
+                };
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let result = crate::suspend::mutate(client, m.clone()).await;
+                    let _ = tx.send(Msg::Mutated { view, m, result });
+                });
+                Ok(false)
+            }
+            Cmd::ConfirmUndo {
+                view,
+                ns,
+                name,
+                revision,
+            } => {
+                app.open_confirm_undo(view, ns, name, revision);
                 Ok(false)
             }
             Cmd::PickContainer {

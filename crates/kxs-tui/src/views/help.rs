@@ -66,10 +66,7 @@ impl View for HelpView {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        vec![Hint {
-            key: "esc",
-            desc: "back",
-        }]
+        vec![Hint::action("esc", "back")]
     }
 
     fn handle_key(&mut self, key: KeyEvent, _ctx: &AppCtx) -> Vec<Cmd> {

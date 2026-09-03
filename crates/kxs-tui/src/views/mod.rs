@@ -9,4 +9,5 @@ pub mod namespaces;
 pub mod pager;
 pub mod pods;
 pub mod resources;
+pub mod rollout;
 pub mod yaml;

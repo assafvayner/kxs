@@ -57,10 +57,7 @@ impl View for MetricsView {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        vec![Hint {
-            key: "r",
-            desc: "refresh",
-        }]
+        vec![Hint::action("r", "refresh")]
     }
 
     fn handle_key(&mut self, key: KeyEvent, _ctx: &AppCtx) -> Vec<Cmd> {

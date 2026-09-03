@@ -91,14 +91,8 @@ impl View for ContextsView {
 
     fn hints(&self) -> Vec<Hint> {
         vec![
-            Hint {
-                key: "enter",
-                desc: "connect",
-            },
-            Hint {
-                key: "r",
-                desc: "re-ping",
-            },
+            Hint::action("enter", "connect"),
+            Hint::action("r", "re-ping"),
         ]
     }
 

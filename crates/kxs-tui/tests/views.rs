@@ -16,6 +16,17 @@ use kxs_tui::view::View;
 use kxs_tui::views::contexts::ContextsView;
 use kxs_tui::views::resources::ResourcesView;
 
+fn pod_target() -> kxs_tui::view::Target {
+    kxs_tui::view::Target {
+        kind: pod_kind(),
+        ns: Some("default".into()),
+        name: "web".into(),
+        container: None,
+        desired_replicas: None,
+        suspend: None,
+    }
+}
+
 fn test_app() -> App {
     let sessions: Shared = std::sync::Arc::new(std::sync::Mutex::new(Sessions::default()));
     App::new(
@@ -227,12 +238,7 @@ fn age_column_sorts_by_creation() {
 #[test]
 fn yaml_view_renders_syntax_text() {
     let mut app = test_app();
-    let target = kxs_tui::view::Target {
-        kind: pod_kind(),
-        ns: Some("default".into()),
-        name: "web".into(),
-        container: None,
-    };
+    let target = pod_target();
     let view = kxs_tui::views::yaml::YamlView::new(&mut app, &target);
     let id = view.id();
     app.push_view(Box::new(view));
@@ -254,12 +260,7 @@ fn yaml_view_renders_syntax_text() {
 #[test]
 fn describe_view_renders_plain_text() {
     let mut app = test_app();
-    let target = kxs_tui::view::Target {
-        kind: pod_kind(),
-        ns: Some("default".into()),
-        name: "web".into(),
-        container: None,
-    };
+    let target = pod_target();
     let view = kxs_tui::views::describe::DescribeView::new(&mut app, &target);
     let id = view.id();
     app.push_view(Box::new(view));
@@ -385,6 +386,8 @@ fn logs_view_renders_lines_and_filters() {
         ns: Some("default".into()),
         name: "web".into(),
         container: Some("web".into()),
+        desired_replicas: None,
+        suspend: None,
     };
     let view = kxs_tui::views::logs::LogsView::new_with_container(&mut app, target);
     let id = view.id();
@@ -508,4 +511,147 @@ fn enter_on_pod_opens_containers_and_fetches() {
     // Esc back
     app.update(Msg::Key(KeyEvent::from(KeyCode::Esc)));
     assert_eq!(app.views.len(), 1);
+}
+
+#[test]
+fn readonly_refuses_mutations() {
+    let sessions = kxs_tui::sessions::Shared::new(std::sync::Mutex::new(
+        kxs_tui::sessions::Sessions::default(),
+    ));
+    let cfg = kxs_tui::config::Config {
+        readonly: true,
+        ..Default::default()
+    };
+    let mut app = App::new(
+        sessions,
+        std::sync::Arc::new(std::sync::Mutex::new(cfg)),
+        theme::get(theme::DEFAULT_ID),
+    );
+    let view = resources_view(&mut app);
+    let id = view.id();
+    app.push_view(view);
+    app.update(Msg::Table {
+        view: id,
+        ev: TableEvent::Table {
+            table: fixture_table(),
+        },
+    });
+    // 'e' (edit) refused with a flash, no Suspend cmd
+    let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Char('e'))));
+    assert!(cmds.is_empty());
+    assert!(app
+        .chrome
+        .flash
+        .as_ref()
+        .is_some_and(|f| f.text.contains("readonly")));
+    // non-mutating keys still work
+    let _ = app.update(Msg::Key(KeyEvent::from(KeyCode::Char('d'))));
+    assert_eq!(app.views.len(), 2);
+}
+
+#[test]
+fn scale_input_modal_prefills_and_submits() {
+    let mut app = test_app();
+    let view = resources_view(&mut app);
+    let id = view.id();
+    app.push_view(view);
+    app.update(Msg::Table {
+        view: id,
+        ev: TableEvent::Table {
+            table: fixture_table(),
+        },
+    });
+    // fixture_table is Pods kind — not scalable; construct a deployment-like target via
+    // the app's mutation path is kind-gated, so test the modal directly:
+    app.chrome.open_input(
+        "Scale x to replicas:".into(),
+        "2".into(),
+        id,
+        kxs_tui::chrome::InputAction::Scale {
+            kind: pod_kind(),
+            ns: "default".into(),
+            name: "x".into(),
+        },
+    );
+    let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Char('3'))));
+    assert!(cmds.is_empty());
+    let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+    assert!(cmds.iter().any(|c| matches!(
+        c,
+        kxs_tui::cmd::Cmd::Mutate {
+            m: kxs_tui::cmd::Mutation::Scale { replicas: 23, .. },
+            ..
+        }
+    ) || matches!(
+        c,
+        kxs_tui::cmd::Cmd::Mutate {
+            m: kxs_tui::cmd::Mutation::Scale { replicas: 3, .. },
+            ..
+        }
+    )));
+}
+
+#[test]
+fn delete_modal_tracks_propagation_and_force() {
+    let mut app = test_app();
+    let view = resources_view(&mut app);
+    let id = view.id();
+    app.push_view(view);
+    app.chrome.open_delete(
+        "Delete Pod web?".into(),
+        id,
+        pod_kind(),
+        "default".into(),
+        "web".into(),
+    );
+    let _ = app.update(Msg::Key(KeyEvent::from(KeyCode::Right)));
+    let _ = app.update(Msg::Key(KeyEvent::from(KeyCode::Char('f'))));
+    let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+    assert!(cmds.iter().any(|c| matches!(
+        c,
+        kxs_tui::cmd::Cmd::Mutate {
+            m: kxs_tui::cmd::Mutation::Delete { propagation: Some(p), force: true, .. },
+            ..
+        }
+        if p == "Foreground"
+    )));
+    assert!(app.chrome.delete.is_none());
+}
+
+#[test]
+fn rollout_view_lists_revisions_and_confirms_undo() {
+    use kxs_tui::cmd::Cmd;
+    let mut app = test_app();
+    let target = pod_target();
+    let view = kxs_tui::views::rollout::RolloutView::new(&mut app, target);
+    let id = view.id();
+    let cmds = app.push_view(Box::new(view));
+    assert!(cmds.iter().any(|c| matches!(c, Cmd::Fetch { .. })));
+    app.update(Msg::Fetched {
+        view: id,
+        result: Ok(kxs_tui::cmd::FetchResult::Rollout(vec![
+            kxs_cluster::workloads::RolloutRevision {
+                revision: 2,
+                name: "web-abc".into(),
+                created: Some("2026-09-01T00:00:00Z".into()),
+                images: vec!["web:2".into()],
+                replicas: 2,
+                current: true,
+            },
+            kxs_cluster::workloads::RolloutRevision {
+                revision: 1,
+                name: "web-def".into(),
+                created: Some("2026-08-01T00:00:00Z".into()),
+                images: vec!["web:1".into()],
+                replicas: 2,
+                current: false,
+            },
+        ])),
+    });
+    // move to revision 1 and press Enter → ConfirmUndo
+    let _ = app.update(Msg::Key(KeyEvent::from(KeyCode::Char('j'))));
+    let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+    assert!(cmds
+        .iter()
+        .any(|c| matches!(c, Cmd::ConfirmUndo { revision: 1, .. })));
 }

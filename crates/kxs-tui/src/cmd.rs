@@ -46,6 +46,67 @@ pub enum Fetch {
         ns: String,
         name: String,
     },
+    RolloutHistory {
+        ns: String,
+        name: String,
+    },
+}
+
+/// A cluster mutation; the runtime dispatches to the matching kxs-cluster call.
+#[derive(Debug, Clone)]
+pub enum Mutation {
+    Scale {
+        kind: ResourceKind,
+        ns: String,
+        name: String,
+        replicas: i32,
+    },
+    Restart {
+        kind: ResourceKind,
+        ns: String,
+        name: String,
+    },
+    Cordon {
+        ns: String,
+        name: String,
+        unschedulable: bool,
+    },
+    Drain {
+        ns: String,
+        name: String,
+    },
+    Trigger {
+        ns: String,
+        name: String,
+    },
+    Suspend {
+        ns: String,
+        name: String,
+        suspend: bool,
+    },
+    Undo {
+        ns: String,
+        name: String,
+        revision: i64,
+    },
+    Delete {
+        kind: ResourceKind,
+        ns: String,
+        name: String,
+        propagation: Option<String>,
+        force: bool,
+    },
+}
+
+/// Terminal handoff actions, run inline by the runtime with the TUI suspended.
+#[derive(Debug, Clone)]
+pub enum SuspendAction {
+    /// `e`: fetch the manifest, open $KUBE_EDITOR, apply on save.
+    Edit {
+        kind: ResourceKind,
+        ns: Option<String>,
+        name: String,
+    },
 }
 
 /// Result payloads for `Cmd::Fetch`.
@@ -59,6 +120,7 @@ pub enum FetchResult {
     PodNames(Vec<String>),
     /// Result of the container picker modal.
     ContainerPicked(String),
+    Rollout(Vec<kxs_cluster::workloads::RolloutRevision>),
 }
 
 /// Side effects. The runtime turns each variant into a tokio task that calls
@@ -82,6 +144,13 @@ pub enum Cmd {
         view: ViewId,
         req: LogRequest,
     },
+    /// A cluster mutation (delete/scale/restart/...); reports via `Msg::Mutated`.
+    Mutate {
+        view: ViewId,
+        m: Mutation,
+    },
+    /// Leave the TUI, run the action on the real terminal, come back.
+    Suspend(SuspendAction),
     /// Repeating metrics poll for the header and the Metrics view.
     PollMetrics {
         view: ViewId,
@@ -94,6 +163,13 @@ pub enum Cmd {
     /// Background reachability ping for one context.
     Ping {
         context: String,
+    },
+    /// Ask (via a confirm modal) to roll back to a revision.
+    ConfirmUndo {
+        view: ViewId,
+        ns: String,
+        name: String,
+        revision: i64,
     },
     /// Open the container picker modal for a pod; the choice is routed back
     /// to `view` as `Msg::Picked`.

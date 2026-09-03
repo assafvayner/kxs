@@ -149,6 +149,17 @@ impl ResourcesView {
             ns: self.watched_ns.clone(),
             name: r.name.clone(),
             container: None,
+            // READY "2/2" → desired replicas 2 (deployment-style rows)
+            desired_replicas: r
+                .cells
+                .iter()
+                .find(|c| c.contains('/') && c.split('/').all(|p| p.trim().parse::<i32>().is_ok()))
+                .and_then(|c| c.split('/').next()?.trim().parse::<i32>().ok()),
+            suspend: r
+                .cells
+                .iter()
+                .find(|c| c.eq_ignore_ascii_case("true") || c.eq_ignore_ascii_case("false"))
+                .map(|c| c.eq_ignore_ascii_case("true")),
         }
     }
 
@@ -203,18 +214,9 @@ impl View for ResourcesView {
 
     fn hints(&self) -> Vec<Hint> {
         vec![
-            Hint {
-                key: "d",
-                desc: "describe",
-            },
-            Hint {
-                key: "y",
-                desc: "yaml",
-            },
-            Hint {
-                key: "r",
-                desc: "refresh",
-            },
+            Hint::action("d", "describe"),
+            Hint::action("y", "yaml"),
+            Hint::action("r", "refresh"),
         ]
     }
 
@@ -342,6 +344,14 @@ impl View for ResourcesView {
         let selector_changed = labels != self.labels;
         self.labels = labels;
         self.name_filter = name;
+        // keep the selection if it survives the filter, else take the first visible
+        let keys = self.keys();
+        if !keys
+            .iter()
+            .any(|k| Some(k.as_str()) == self.selected.as_deref())
+        {
+            self.selected = keys.first().cloned();
+        }
         if selector_changed {
             let mut cmds = self.stop_old();
             cmds.push(self.restart_watch());
@@ -353,6 +363,10 @@ impl View for ResourcesView {
 
     fn on_pop(&mut self) -> Vec<Cmd> {
         self.stop_old()
+    }
+
+    fn wants_enter(&self) -> bool {
+        true
     }
 
     fn target(&self) -> Option<crate::view::Target> {

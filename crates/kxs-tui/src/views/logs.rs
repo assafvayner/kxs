@@ -202,34 +202,13 @@ impl View for LogsView {
 
     fn hints(&self) -> Vec<Hint> {
         vec![
-            Hint {
-                key: "s",
-                desc: "autoscroll",
-            },
-            Hint {
-                key: "w",
-                desc: "wrap",
-            },
-            Hint {
-                key: "t",
-                desc: "timestamps",
-            },
-            Hint {
-                key: "c",
-                desc: "clear",
-            },
-            Hint {
-                key: "p",
-                desc: "previous",
-            },
-            Hint {
-                key: "0-5",
-                desc: "since",
-            },
-            Hint {
-                key: "shift-c",
-                desc: "copy",
-            },
+            Hint::action("s", "autoscroll"),
+            Hint::action("w", "wrap"),
+            Hint::action("t", "timestamps"),
+            Hint::action("c", "clear"),
+            Hint::action("p", "previous"),
+            Hint::action("0-5", "since"),
+            Hint::action("shift-c", "copy"),
         ]
     }
 
