@@ -1,8 +1,10 @@
 pub mod bridge;
+pub mod command;
 pub mod describe;
 pub mod discovery;
 pub mod edit;
 pub mod exec;
+pub mod kinds;
 pub mod logs;
 pub mod metrics;
 pub mod pods;
