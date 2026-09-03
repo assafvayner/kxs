@@ -150,11 +150,14 @@ fn write_kind(
             &lookups.pods,
             now_ms
         )),
-        ("", "Namespace") => typed!(
-            Namespace,
-            |o| namespace::write(w, &o, &lookups.quotas, &lookups.limit_ranges),
-            false
-        ),
+        ("", "Namespace") => {
+            if let Ok(namespace) = serde_json::from_value::<Namespace>(value.clone()) {
+                namespace::write(w, &namespace, &lookups.quotas, &lookups.limit_ranges);
+            } else {
+                generic::write(w, value, kind.namespaced);
+            }
+            return false;
+        }
         ("", "PersistentVolumeClaim") => typed!(PersistentVolumeClaim, |o| {
             storage::write_pvc(w, &o, &lookups.pods, now_ms)
         }),
@@ -379,6 +382,46 @@ mod tests {
         }
         assert!(!output.contains("Events"));
         assert!(!output.contains("event-secret-marker"));
+    }
+
+    #[test]
+    fn malformed_namespace_generic_fallback_suppresses_events() {
+        let kind = ResourceKind {
+            group: "".into(),
+            version: "v1".into(),
+            kind: "Namespace".into(),
+            plural: "namespaces".into(),
+            namespaced: false,
+            aliases: vec![],
+        };
+        let value = json!({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {"name": "broken"},
+            "status": {"phase": 42}
+        });
+        let events = [ResourceEvent {
+            type_: "Warning".into(),
+            reason: "NamespaceEvent".into(),
+            message: "event-namespace-marker".into(),
+            count: 1,
+            last_seen: Some("2026-07-03T11:59:00Z".into()),
+            first_seen: None,
+            source: "namespace-source".into(),
+        }];
+
+        let output = describe_value(
+            &kind,
+            &value,
+            &Lookups::default(),
+            &events,
+            "2026-07-03T12:00:00Z".parse().unwrap(),
+        );
+
+        assert!(output.contains("Name:         broken\n"));
+        assert!(output.contains("Phase:  42\n"));
+        assert!(!output.contains("Events"));
+        assert!(!output.contains("event-namespace-marker"));
     }
 
     #[test]
