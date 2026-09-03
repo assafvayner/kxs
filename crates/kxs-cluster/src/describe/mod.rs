@@ -202,11 +202,34 @@ pub async fn describe(
     Ok(describe_value(kind, &value, &lookups, &events, Utc::now()))
 }
 
+/// kubectl's chunk size for the pod listings a describer needs.
+const LIST_CHUNK: u32 = 500;
+
 async fn list_or_empty<K>(api: Api<K>, lp: ListParams) -> Vec<K>
 where
     K: Clone + DeserializeOwned + std::fmt::Debug,
 {
     api.list(&lp).await.map(|l| l.items).unwrap_or_default()
+}
+
+/// Paginated listing, following `continue` tokens like kubectl's
+/// `getPodsInChunks`. A failed page ends the walk with what was read so far.
+async fn list_in_chunks<K>(api: Api<K>, lp: ListParams) -> Vec<K>
+where
+    K: Clone + DeserializeOwned + std::fmt::Debug,
+{
+    let mut lp = lp.limit(LIST_CHUNK);
+    let mut items = Vec::new();
+    loop {
+        let Ok(page) = api.list(&lp).await else {
+            return items;
+        };
+        items.extend(page.items);
+        match page.metadata.continue_.filter(|token| !token.is_empty()) {
+            Some(token) => lp.continue_token = Some(token),
+            None => return items,
+        }
+    }
 }
 
 fn best_effort_get<T, E>(result: Result<Option<T>, E>) -> Option<T> {
@@ -228,14 +251,16 @@ async fn gather(
     value: &Value,
 ) -> Lookups {
     let mut l = Lookups::default();
-    let ns = namespace.unwrap_or("");
+    let ns = namespace.filter(|ns| !ns.is_empty());
     match (kind.group.as_str(), kind.kind.as_str()) {
         ("", "Service") => {
-            l.endpoints = Api::<Endpoints>::namespaced(client.clone(), ns)
-                .get_opt(name)
-                .await
-                .ok()
-                .flatten();
+            if let Some(ns) = ns {
+                l.endpoints = best_effort_get(
+                    Api::<Endpoints>::namespaced(client.clone(), ns)
+                        .get_opt(name)
+                        .await,
+                );
+            }
         }
         ("", "Node") => {
             l.lease = best_effort_get(
@@ -243,9 +268,11 @@ async fn gather(
                     .get_opt(name)
                     .await,
             );
-            l.pods = list_or_empty(
+            l.pods = list_in_chunks(
                 Api::<Pod>::all(client.clone()),
-                ListParams::default().fields(&format!("spec.nodeName={name}")),
+                ListParams::default().fields(&format!(
+                    "spec.nodeName={name},status.phase!=Succeeded,status.phase!=Failed"
+                )),
             )
             .await;
         }
@@ -262,18 +289,23 @@ async fn gather(
             .await;
         }
         ("", "PersistentVolumeClaim") => {
-            l.pods = list_or_empty(
-                Api::<Pod>::namespaced(client.clone(), ns),
-                ListParams::default(),
-            )
-            .await;
+            if let Some(ns) = ns {
+                l.pods = list_in_chunks(
+                    Api::<Pod>::namespaced(client.clone(), ns),
+                    ListParams::default(),
+                )
+                .await;
+            }
         }
         ("", "ServiceAccount") => {
-            l.service_account_secrets =
-                service_account_secret_lookup(Api::<Secret>::namespaced(client.clone(), ns)).await;
+            if let Some(ns) = ns {
+                l.service_account_secrets =
+                    service_account_secret_lookup(Api::<Secret>::namespaced(client.clone(), ns))
+                        .await;
+            }
         }
         ("apps", "Deployment") => {
-            if let Some(sel) = selector_of(value) {
+            if let (Some(ns), Some(sel)) = (ns, selector_of(value)) {
                 l.replica_sets = list_or_empty(
                     Api::<ReplicaSet>::namespaced(client.clone(), ns),
                     ListParams::default().labels(&sel),
@@ -282,8 +314,8 @@ async fn gather(
             }
         }
         ("apps", "ReplicaSet" | "StatefulSet" | "DaemonSet") => {
-            if let Some(sel) = selector_of(value) {
-                l.pods = list_or_empty(
+            if let (Some(ns), Some(sel)) = (ns, selector_of(value)) {
+                l.pods = list_in_chunks(
                     Api::<Pod>::namespaced(client.clone(), ns),
                     ListParams::default().labels(&sel),
                 )

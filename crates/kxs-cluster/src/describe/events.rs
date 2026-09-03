@@ -1,16 +1,29 @@
 use super::util::{or_none, NONE};
 use super::writer::Writer;
 use crate::resources::ResourceEvent;
+use k8s_openapi::chrono::{DateTime, Utc};
 use kxs_core::format::human_age;
 
-/// kubectl's trailing `Events:` section, oldest first.
+/// kubectl's trailing `Events:` section, oldest first. Events whose timestamp
+/// is missing or unparsable sort last.
 pub fn write_events(w: &mut Writer, events: &[ResourceEvent], now_ms: i64) {
     if events.is_empty() {
         w.kv(0, "Events", NONE);
         return;
     }
-    let mut sorted: Vec<&ResourceEvent> = events.iter().collect();
-    sorted.sort_by(|a, b| a.last_seen.cmp(&b.last_seen));
+    let mut sorted: Vec<(Option<DateTime<Utc>>, &ResourceEvent)> = events
+        .iter()
+        .map(|e| {
+            (
+                e.last_seen
+                    .as_deref()
+                    .and_then(|t| t.parse::<DateTime<Utc>>().ok()),
+                e,
+            )
+        })
+        .collect();
+    sorted.sort_by_key(|(seen, _)| (seen.is_none(), *seen));
+    let sorted = sorted.into_iter().map(|(_, e)| e);
     w.section(0, "Events");
     w.cells(1, &["Type", "Reason", "Age", "From", "Message"]);
     w.cells(1, &["----", "------", "----", "----", "-------"]);
