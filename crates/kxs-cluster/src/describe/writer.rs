@@ -4,14 +4,12 @@
 /// last is padded to the widest cell in its column plus two spaces. Lines
 /// with a single cell are emitted verbatim and end the block.
 ///
-/// Go's tabwriter narrows a column recursively: within a block it only
-/// considers lines that actually reach that column, so a run of two-cell lines
-/// interrupting three-cell lines forms its own sub-block for column 0. This
-/// implementation instead measures each column over the whole run of lines with
-/// two or more cells. The two agree wherever kubectl keeps a block uniform,
-/// which is every table it prints; they differ only in the width of the first
-/// column when cell counts vary mid-block, and there the wider column is still
-/// aligned and readable — the describe output is read, not parsed.
+/// Go's tabwriter breaks a column `c`'s block when a line has fewer than
+/// `c+2` cells, so a 2-cell line doesn't break column 0 but does break column
+/// 1 and later. This implementation instead measures every column over the
+/// whole run of lines with two or more cells, so the second and later columns
+/// can come out wider than Go's when 2-cell and 3-cell lines interleave (e.g.
+/// Pod `Environment:` with plain values between `valueFrom` rows).
 #[derive(Debug, Default)]
 pub struct Writer {
     lines: Vec<Line>,
@@ -209,8 +207,10 @@ mod tests {
         assert_eq!(w.finish(), "\nData\n====\nk:\n");
     }
 
-    /// Pins the divergence from Go's per-column recursion described above: the
-    /// plain `kv` line in the middle widens column 0 for the whole block.
+    /// Pins the divergence from Go's per-column recursion described above:
+    /// the 2-cell `kv` line in the middle breaks Go's column-1 block, but
+    /// here column 1 is shared across the whole run, widening it for both
+    /// `TOKEN:` and `PASSWORD:`.
     #[test]
     fn interleaved_cell_counts_share_one_column_width() {
         let mut w = Writer::new();

@@ -450,9 +450,14 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
         .and_then(|s| s.taints.as_deref())
         .unwrap_or(&[])
         .iter()
-        .map(|t| match t.value.as_deref().filter(|v| !v.is_empty()) {
-            Some(v) => format!("{}={v}:{}", t.key, t.effect),
-            None => format!("{}:{}", t.key, t.effect),
+        .map(|t| {
+            let value = t.value.as_deref().filter(|v| !v.is_empty());
+            match (value, t.effect.is_empty()) {
+                (Some(v), false) => format!("{}={v}:{}", t.key, t.effect),
+                (Some(v), true) => format!("{}={v}", t.key),
+                (None, false) => format!("{}:{}", t.key, t.effect),
+                (None, true) => t.key.clone(),
+            }
         })
         .collect();
     write_list(w, 0, "Taints", &taints);
@@ -606,6 +611,7 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
         &[
             "Namespace",
             "Name",
+            "",
             "CPU Requests",
             "CPU Limits",
             "Memory Requests",
@@ -618,6 +624,7 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
         &[
             "---------",
             "----",
+            "",
             "------------",
             "----------",
             "---------------",
@@ -662,6 +669,7 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
             &[
                 p.metadata.namespace.as_deref().unwrap_or(""),
                 p.metadata.name.as_deref().unwrap_or(""),
+                "",
                 &cpu_request,
                 &cpu_limit,
                 &memory_request,
@@ -745,7 +753,8 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
 mod tests {
     use super::*;
     use k8s_openapi::api::core::v1::{
-        NodeCondition, NodeSpec, NodeStatus, PodCondition, PodSpec, PodStatus, ResourceRequirements,
+        NodeCondition, NodeSpec, NodeStatus, PodCondition, PodSpec, PodStatus,
+        ResourceRequirements, Taint,
     };
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
@@ -1087,6 +1096,57 @@ mod tests {
         assert!(hugepages < fpga && fpga < gpu);
     }
 
+    /// Mirrors kubectl's `Taint.ToString()`: `key=value:effect`, dropping the
+    /// `=value` when empty, the `:effect` when empty, or both.
+    #[test]
+    fn taints_format_like_kubectl() {
+        let node = Node {
+            spec: Some(NodeSpec {
+                taints: Some(vec![
+                    Taint {
+                        key: "dedicated".to_string(),
+                        value: Some("gpu".to_string()),
+                        effect: "NoSchedule".to_string(),
+                        ..Default::default()
+                    },
+                    Taint {
+                        key: "dedicated".to_string(),
+                        value: None,
+                        effect: "NoSchedule".to_string(),
+                        ..Default::default()
+                    },
+                    Taint {
+                        key: "dedicated".to_string(),
+                        value: Some("gpu".to_string()),
+                        effect: String::new(),
+                        ..Default::default()
+                    },
+                    Taint {
+                        key: "dedicated".to_string(),
+                        value: None,
+                        effect: String::new(),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut w = Writer::new();
+        write(&mut w, &node, None, &[], 0);
+        let output = w.finish();
+
+        assert!(
+            output.contains(concat!(
+                "Taints:         dedicated=gpu:NoSchedule\n",
+                "                dedicated:NoSchedule\n",
+                "                dedicated=gpu\n",
+                "                dedicated\n",
+            )),
+            "taints:\n{output}"
+        );
+    }
+
     #[test]
     fn empty_node_still_prints_addresses_and_system_info() {
         let mut w = Writer::new();
@@ -1146,13 +1206,14 @@ mod tests {
             "  ----   ------  -----------------                ------------------               ------        -------\n",
             "  Ready  True    Fri, 03 Jul 2026 11:59:00 +0000  Wed, 01 Jul 2026 00:00:00 +0000  KubeletReady  kubelet is posting ready status\n",
         )), "conditions table:\n{output}");
-        // The System Info entries share the block, so column 0 is as wide as
-        // `  Container Runtime Version:` — exactly what kubectl prints.
+        // kubectl writes an empty cell after Name (a literal `\t\t` in its
+        // format string), which widens the Name column by two spaces versus
+        // a plain 7-column table.
         assert!(output.contains(concat!(
             "Non-terminated Pods:          (1 in total)\n",
-            "  Namespace                   Name   CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age\n",
-            "  ---------                   ----   ------------  ----------  ---------------  -------------  ---\n",
-            "  default                     web-1  100m (5%)     500m (25%)  64Mi (6%)        128Mi (12%)    2d12h\n",
+            "  Namespace                   Name     CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age\n",
+            "  ---------                   ----     ------------  ----------  ---------------  -------------  ---\n",
+            "  default                     web-1    100m (5%)     500m (25%)  64Mi (6%)        128Mi (12%)    2d12h\n",
         )), "pod table:\n{output}");
         assert!(
             output.contains(concat!(

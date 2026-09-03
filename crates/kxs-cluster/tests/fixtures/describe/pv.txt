@@ -14,10 +14,10 @@ Node Affinity:
     Term 0:  topology.kubernetes.io/zone in [us-east-1a]
 Message:
 Source:
-  Type:  CSI (a Container Storage Interface (CSI) volume source)
-  Driver:  ebs.csi.aws.com
-  FSType:  ext4
-  VolumeHandle:  vol-1
-  ReadOnly:  false
-  VolumeAttributes:  storage.kubernetes.io/csiProvisionerIdentity=x
+    Type:  CSI (a Container Storage Interface (CSI) volume source)
+    Driver:  ebs.csi.aws.com
+    FSType:  ext4
+    VolumeHandle:  vol-1
+    ReadOnly:  false
+    VolumeAttributes:  storage.kubernetes.io/csiProvisionerIdentity=x
 Events:  <none>

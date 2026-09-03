@@ -191,20 +191,20 @@ pub fn write_pv(w: &mut Writer, pv: &PersistentVolume, now_ms: i64) {
 
 fn write_source(w: &mut Writer, pv: &PersistentVolume) {
     let Some(spec) = pv.spec.as_ref() else {
-        w.text(1, UNKNOWN);
+        w.text(2, UNKNOWN);
         return;
     };
 
     if let Some(csi) = spec.csi.as_ref() {
         w.kv(
-            1,
+            2,
             "Type",
             "CSI (a Container Storage Interface (CSI) volume source)",
         );
-        w.kv(1, "Driver", &csi.driver);
-        w.kv(1, "FSType", csi.fs_type.as_deref().unwrap_or(""));
-        w.kv(1, "VolumeHandle", &csi.volume_handle);
-        w.kv(1, "ReadOnly", csi.read_only.unwrap_or(false));
+        w.kv(2, "Driver", &csi.driver);
+        w.kv(2, "FSType", csi.fs_type.as_deref().unwrap_or(""));
+        w.kv(2, "VolumeHandle", &csi.volume_handle);
+        w.kv(2, "ReadOnly", csi.read_only.unwrap_or(false));
         let attributes: Vec<String> = csi
             .volume_attributes
             .as_ref()
@@ -215,35 +215,35 @@ fn write_source(w: &mut Writer, pv: &PersistentVolume) {
                     .collect()
             })
             .unwrap_or_default();
-        write_list(w, 1, "VolumeAttributes", &attributes);
+        write_list(w, 2, "VolumeAttributes", &attributes);
     } else if let Some(host_path) = spec.host_path.as_ref() {
-        w.kv(1, "Type", "HostPath (bare host directory volume)");
-        w.kv(1, "Path", &host_path.path);
+        w.kv(2, "Type", "HostPath (bare host directory volume)");
+        w.kv(2, "Path", &host_path.path);
         w.kv(
-            1,
+            2,
             "HostPathType",
             host_path.type_.as_deref().unwrap_or(NONE),
         );
     } else if let Some(nfs) = spec.nfs.as_ref() {
         w.kv(
-            1,
+            2,
             "Type",
             "NFS (an NFS mount that lasts the lifetime of a pod)",
         );
-        w.kv(1, "Server", &nfs.server);
-        w.kv(1, "Path", &nfs.path);
-        w.kv(1, "ReadOnly", nfs.read_only.unwrap_or(false));
+        w.kv(2, "Server", &nfs.server);
+        w.kv(2, "Path", &nfs.path);
+        w.kv(2, "ReadOnly", nfs.read_only.unwrap_or(false));
     } else if let Some(local) = spec.local.as_ref() {
         w.kv(
-            1,
+            2,
             "Type",
             "LocalVolume (a persistent volume backed by local storage on a node)",
         );
-        w.kv(1, "Path", &local.path);
+        w.kv(2, "Path", &local.path);
     } else {
         // kubectl's broad source switch is intentionally out of scope for the
         // four source kinds supported by this describer.
-        w.text(1, UNKNOWN);
+        w.text(2, UNKNOWN);
     }
 }
 
@@ -618,7 +618,7 @@ mod tests {
         })));
         assert_eq!(
             tail_from(&host_path, "Source:"),
-            "Source:\n  Type:  HostPath (bare host directory volume)\n  Path:  /data\n  HostPathType:  <none>\n"
+            "Source:\n    Type:  HostPath (bare host directory volume)\n    Path:  /data\n    HostPathType:  <none>\n"
         );
 
         let nfs = normalize(&pv_output(json!({
@@ -627,7 +627,7 @@ mod tests {
         })));
         assert_eq!(
             tail_from(&nfs, "Source:"),
-            "Source:\n  Type:  NFS (an NFS mount that lasts the lifetime of a pod)\n  Server:  server\n  Path:  /export\n  ReadOnly:  true\n"
+            "Source:\n    Type:  NFS (an NFS mount that lasts the lifetime of a pod)\n    Server:  server\n    Path:  /export\n    ReadOnly:  true\n"
         );
 
         let local = normalize(&pv_output(json!({
@@ -636,11 +636,11 @@ mod tests {
         })));
         assert_eq!(
             tail_from(&local, "Source:"),
-            "Source:\n  Type:  LocalVolume (a persistent volume backed by local storage on a node)\n  Path:  /mnt/local\n"
+            "Source:\n    Type:  LocalVolume (a persistent volume backed by local storage on a node)\n    Path:  /mnt/local\n"
         );
 
         let unknown = normalize(&pv_output(json!({"metadata": {"name": "unknown"}})));
-        assert_eq!(tail_from(&unknown, "Source:"), "Source:\n  <unknown>\n");
+        assert_eq!(tail_from(&unknown, "Source:"), "Source:\n    <unknown>\n");
     }
 
     #[test]
@@ -687,7 +687,7 @@ mod tests {
                 "Node Affinity:  <none>\n",
                 "Message:\n",
                 "Source:\n",
-                "  <unknown>\n",
+                "    <unknown>\n",
             )
         );
     }
@@ -726,7 +726,7 @@ mod tests {
                 "Node Affinity:  <none>\n",
                 "Message:\n",
                 "Source:\n",
-                "  <unknown>\n",
+                "    <unknown>\n",
             )
         );
     }

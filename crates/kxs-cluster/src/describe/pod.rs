@@ -712,6 +712,7 @@ fn write_topology_spread_constraints(
     let Some(constraints) = constraints.filter(|c| !c.is_empty()) else {
         return;
     };
+    // Sorted by topologyKey, mirroring kubectl's printTopologySpreadConstraintsMultilineWithIndent.
     let mut sorted: Vec<&TopologySpreadConstraint> = constraints.iter().collect();
     sorted.sort_by(|a, b| a.topology_key.cmp(&b.topology_key));
     let lines: Vec<String> = sorted
