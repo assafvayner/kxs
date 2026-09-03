@@ -10,7 +10,7 @@ Rules:
   Host  Path  Backends
   ----  ----  --------
   example.com
-    /  web:80
-    /api  api:http
+               /  web:80
+               /api  api:http
 Annotations:  nginx.ingress.kubernetes.io/rewrite-target: /
 Events:  <none>

@@ -365,12 +365,8 @@ fn pod_resource_amounts(pod: &Pod, use_status: bool) -> (ResourceAmounts, Resour
     (requests, limits)
 }
 
-fn resource<'a>(resources: &'a ResourceAmounts, name: &str) -> Option<&'a Amount> {
-    resources.get(name)
-}
-
 fn value_or_zero(resources: &ResourceAmounts, name: &str) -> Amount {
-    resource(resources, name).copied().unwrap_or_default()
+    resources.get(name).copied().unwrap_or_default()
 }
 
 fn percent(used: Amount, total: Option<&Amount>, nanos_per_unit: i128) -> i128 {
@@ -418,8 +414,9 @@ fn lease_time(time: Option<&MicroTime>) -> String {
         .unwrap_or_else(|| UNSET.to_string())
 }
 
-fn write_lease(w: &mut Writer, lease: Option<&Lease>) {
-    let spec = lease.and_then(|lease| lease.spec.as_ref());
+/// kubectl only emits this block when the heartbeat lease could be read.
+fn write_lease(w: &mut Writer, lease: &Lease) {
+    let spec = lease.spec.as_ref();
     w.section(0, "Lease");
     w.kv(
         1,
@@ -453,7 +450,7 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
         .and_then(|s| s.taints.as_deref())
         .unwrap_or(&[])
         .iter()
-        .map(|t| match &t.value {
+        .map(|t| match t.value.as_deref().filter(|v| !v.is_empty()) {
             Some(v) => format!("{}={v}:{}", t.key, t.effect),
             None => format!("{}:{}", t.key, t.effect),
         })
@@ -464,7 +461,9 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
         "Unschedulable",
         spec.and_then(|s| s.unschedulable).unwrap_or(false),
     );
-    write_lease(w, lease);
+    if let Some(lease) = lease {
+        write_lease(w, lease);
+    }
     if let Some(conds) = status
         .and_then(|s| s.conditions.as_ref())
         .filter(|c| !c.is_empty())
@@ -562,11 +561,10 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
         "Kubelet Version",
         info.map_or("", |info| &info.kubelet_version),
     );
-    w.kv(
-        1,
-        "Kube-Proxy Version",
-        info.map_or("", |info| &info.kube_proxy_version),
-    );
+    let kube_proxy_version = info.map_or("", |info| &info.kube_proxy_version);
+    if !kube_proxy_version.is_empty() {
+        w.kv(1, "Kube-Proxy Version", kube_proxy_version);
+    }
     if let Some(c) = spec.and_then(|s| s.pod_cidr.as_deref()) {
         w.kv(0, "PodCIDR", c);
     }
@@ -641,22 +639,22 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
         let age = human_age(created.as_deref(), now_ms);
         let cpu_request = resource_cell(
             value_or_zero(&requests, "cpu"),
-            resource(&allocatable, "cpu"),
+            allocatable.get("cpu"),
             1_000_000,
         );
         let cpu_limit = resource_cell(
             value_or_zero(&limits, "cpu"),
-            resource(&allocatable, "cpu"),
+            allocatable.get("cpu"),
             1_000_000,
         );
         let memory_request = resource_cell(
             value_or_zero(&requests, "memory"),
-            resource(&allocatable, "memory"),
+            allocatable.get("memory"),
             NANO,
         );
         let memory_limit = resource_cell(
             value_or_zero(&limits, "memory"),
-            resource(&allocatable, "memory"),
+            allocatable.get("memory"),
             NANO,
         );
         w.cells(
@@ -681,34 +679,34 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
     w.cells(1, &["--------", "--------", "------"]);
     let cpu_request = resource_cell(
         value_or_zero(&total_requests, "cpu"),
-        resource(&allocatable, "cpu"),
+        allocatable.get("cpu"),
         1_000_000,
     );
     let cpu_limit = resource_cell(
         value_or_zero(&total_limits, "cpu"),
-        resource(&allocatable, "cpu"),
+        allocatable.get("cpu"),
         1_000_000,
     );
     w.cells(1, &["cpu", &cpu_request, &cpu_limit]);
     let memory_request = resource_cell(
         value_or_zero(&total_requests, "memory"),
-        resource(&allocatable, "memory"),
+        allocatable.get("memory"),
         NANO,
     );
     let memory_limit = resource_cell(
         value_or_zero(&total_limits, "memory"),
-        resource(&allocatable, "memory"),
+        allocatable.get("memory"),
         NANO,
     );
     w.cells(1, &["memory", &memory_request, &memory_limit]);
     let ephemeral_request = resource_cell(
         value_or_zero(&total_requests, "ephemeral-storage"),
-        resource(&allocatable, "ephemeral-storage"),
+        allocatable.get("ephemeral-storage"),
         NANO,
     );
     let ephemeral_limit = resource_cell(
         value_or_zero(&total_limits, "ephemeral-storage"),
-        resource(&allocatable, "ephemeral-storage"),
+        allocatable.get("ephemeral-storage"),
         NANO,
     );
     w.cells(
@@ -721,12 +719,12 @@ pub fn write(w: &mut Writer, node: &Node, lease: Option<&Lease>, pods: &[Pod], n
     {
         let request = resource_cell(
             value_or_zero(&total_requests, name),
-            resource(&allocatable, name),
+            allocatable.get(name),
             NANO,
         );
         let limit = resource_cell(
             value_or_zero(&total_limits, name),
-            resource(&allocatable, name),
+            allocatable.get(name),
             NANO,
         );
         w.cells(1, &[name, &request, &limit]);
@@ -1101,22 +1099,20 @@ mod tests {
     }
 
     #[test]
-    fn missing_lease_uses_unset_fields() {
+    fn missing_lease_omits_the_whole_block() {
         let mut w = Writer::new();
         write(&mut w, &Node::default(), None, &[], 0);
         let output = w.finish();
 
-        assert!(output.contains("Lease:\n"));
-        assert!(output.contains("HolderIdentity:"));
-        assert!(output.contains("AcquireTime:"));
-        assert!(output.contains("RenewTime:"));
-        assert_eq!(output.matches("<unset>").count(), 3);
+        assert!(!output.contains("Lease:"));
+        assert!(!output.contains("HolderIdentity:"));
+        assert!(!output.contains("<unset>"));
     }
 
     #[test]
     fn lease_fields_default_to_unset() {
         let mut w = Writer::new();
-        write_lease(&mut w, Some(&Lease::default()));
+        write_lease(&mut w, &Lease::default());
 
         assert_eq!(
             w.finish(),

@@ -6,6 +6,11 @@ use std::collections::BTreeMap;
 /// kubectl truncates long annotation values at the default verbosity.
 const MAX_ANNOTATION_LEN: usize = 256;
 
+/// kubectl's `skipAnnotations`: this annotation carries a full copy of the
+/// object, including data the describer deliberately withholds, and is never
+/// printed.
+const LAST_APPLIED_CONFIGURATION: &str = "kubectl.kubernetes.io/last-applied-configuration";
+
 /// Name / Namespace (when namespaced) / Labels / Annotations.
 pub fn write_header(w: &mut Writer, meta: &ObjectMeta, namespaced: bool) {
     w.kv(0, "Name", or_none(meta.name.as_deref()));
@@ -27,22 +32,21 @@ pub fn write_labels_annotations(w: &mut Writer, meta: &ObjectMeta) {
 
 /// `key: value` lines, values truncated to 256 chars with `...`.
 pub fn annotation_lines(m: Option<&BTreeMap<String, String>>) -> Vec<String> {
-    m.map(|m| {
-        m.iter()
-            .map(|(k, v)| {
-                let v = if v.chars().count() > MAX_ANNOTATION_LEN {
-                    format!(
-                        "{}...",
-                        v.chars().take(MAX_ANNOTATION_LEN).collect::<String>()
-                    )
-                } else {
-                    v.clone()
-                };
-                format!("{k}: {v}")
-            })
-            .collect()
-    })
-    .unwrap_or_default()
+    m.into_iter()
+        .flatten()
+        .filter(|(k, _)| k.as_str() != LAST_APPLIED_CONFIGURATION)
+        .map(|(k, v)| {
+            let v = if v.chars().count() > MAX_ANNOTATION_LEN {
+                format!(
+                    "{}...",
+                    v.chars().take(MAX_ANNOTATION_LEN).collect::<String>()
+                )
+            } else {
+                v.clone()
+            };
+            format!("{k}: {v}")
+        })
+        .collect()
 }
 
 /// `Controlled By:  Kind/name` for the controller owner reference, if any.
@@ -104,6 +108,27 @@ mod tests {
         let lines = annotation_lines(Some(&[("k".to_string(), long)].into_iter().collect()));
         assert_eq!(lines[0].len(), "k: ".len() + 256 + 3);
         assert!(lines[0].ends_with("..."));
+    }
+
+    #[test]
+    fn last_applied_configuration_is_never_printed() {
+        let meta = ObjectMeta {
+            annotations: Some(
+                [(
+                    "kubectl.kubernetes.io/last-applied-configuration".to_string(),
+                    "{\"data\":{\"password\":\"marker\"}}".to_string(),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+        assert!(annotation_lines(meta.annotations.as_ref()).is_empty());
+        let mut w = Writer::new();
+        write_labels_annotations(&mut w, &meta);
+        let output = w.finish();
+        assert!(!output.contains("marker"));
+        assert!(output.contains("Annotations:  <none>\n"));
     }
 
     #[test]

@@ -80,7 +80,7 @@ fn write_secret_body<'a>(
     w.text(0, "Data");
     w.text(0, "====");
     for (key, len) in data {
-        w.text(0, &format!("{key}:  {len} bytes"));
+        w.kv(0, key, format!("{len} bytes"));
     }
     w.text(0, "");
 }
@@ -88,7 +88,48 @@ fn write_secret_body<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn secret_byte_counts_are_column_aligned() {
+        let secret = Secret {
+            data: Some(BTreeMap::from([
+                ("password".into(), ByteString(vec![0; 8])),
+                ("token".into(), ByteString(vec![0; 16])),
+            ])),
+            type_: Some("Opaque".into()),
+            ..Default::default()
+        };
+        let mut w = Writer::new();
+        write_secret(&mut w, &secret);
+        let output = w.finish();
+
+        assert!(output.contains("password:  8 bytes\n"));
+        assert!(output.contains("token:     16 bytes\n"));
+    }
+
+    #[test]
+    fn secret_hides_the_last_applied_configuration_annotation() {
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some("creds".into()),
+                namespace: Some("default".into()),
+                annotations: Some(BTreeMap::from([(
+                    "kubectl.kubernetes.io/last-applied-configuration".into(),
+                    "{\"data\":{\"password\":\"leaked-secret-marker\"}}".into(),
+                )])),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut w = Writer::new();
+        write_secret(&mut w, &secret);
+        let output = w.finish();
+
+        assert!(!output.contains("leaked-secret-marker"));
+        assert!(output.contains("Annotations:  <none>\n"));
+    }
 
     #[test]
     fn configmap_escapes_terminal_controls_and_preserves_value_whitespace() {

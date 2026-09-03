@@ -5,6 +5,9 @@ use k8s_openapi::api::core::v1::{EndpointSubset, Endpoints, Service, ServicePort
 use k8s_openapi::api::networking::v1::{Ingress, IngressBackend};
 use std::collections::BTreeSet;
 
+/// kubectl's placeholder for an Ingress without an explicit default backend.
+const DEFAULT_BACKEND: &str = "<default>";
+
 /// kubectl's `formatEndpoints`: bare IPs when a subset has no ports, otherwise
 /// `ip:port` for ports matching the service port name. At most 3 entries are
 /// shown across all subsets, followed by `+ N more...`; `<none>` when empty.
@@ -232,6 +235,7 @@ pub fn write_endpoints(w: &mut Writer, eps: &Endpoints) {
     w.section(0, "Subsets");
     for s in subsets {
         write_subset(w, s);
+        w.text(0, "");
     }
 }
 
@@ -252,12 +256,12 @@ fn backend_string(b: &IngressBackend) -> String {
     if let Some(r) = &b.resource {
         return format!(
             "APIGroup: {}, Kind: {}, Name: {}",
-            r.api_group.as_deref().unwrap_or("<none>"),
+            r.api_group.as_deref().unwrap_or(NONE),
             r.kind,
             r.name
         );
     }
-    "<none>".into()
+    NONE.into()
 }
 
 pub fn write_ingress(w: &mut Writer, ing: &Ingress) {
@@ -299,7 +303,7 @@ pub fn write_ingress(w: &mut Writer, ing: &Ingress) {
     w.kv(
         0,
         "Default backend",
-        default_backend.as_deref().unwrap_or("<default>"),
+        default_backend.as_deref().unwrap_or(DEFAULT_BACKEND),
     );
     if let Some(tls) = spec
         .and_then(|s| s.tls.as_deref())
@@ -325,16 +329,24 @@ pub fn write_ingress(w: &mut Writer, ing: &Ingress) {
             continue;
         };
         rendered_rule = true;
-        w.cells(1, &[r.host.as_deref().unwrap_or("*"), "", ""]);
+        let host = r.host.as_deref().filter(|host| !host.is_empty());
+        w.cells(1, &[host.unwrap_or("*"), ""]);
         for p in &http.paths {
+            // kubectl writes the path row as `\t%s \t%s`, so the Host column
+            // holds nothing but LEVEL_2's indent and the path lands in Path.
+            let path = format!("{} ", p.path.as_deref().unwrap_or_default());
             let backend = backend_string(&p.backend);
-            w.cells(2, &[p.path.as_deref().unwrap_or_default(), &backend]);
+            w.cells(0, &["    ", &path, &backend]);
         }
     }
     if !rendered_rule {
         w.cells(
             1,
-            &["*", "*", default_backend.as_deref().unwrap_or("<default>")],
+            &[
+                "*",
+                "*",
+                default_backend.as_deref().unwrap_or(DEFAULT_BACKEND),
+            ],
         );
     }
     write_list(

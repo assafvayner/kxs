@@ -370,7 +370,7 @@ mod tests {
         assert!(output.contains("Name:         broken\n"));
         assert!(output.contains("Type:  Opaque\n"));
         assert!(output.contains("invalid:  0 bytes\n"));
-        assert!(output.contains("valid:  6 bytes\n"));
+        assert!(output.contains("valid:    6 bytes\n"));
         for secret in [
             "not-base64-secret!",
             "c2VjcmV0",
