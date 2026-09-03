@@ -140,6 +140,14 @@ impl ResourcesView {
         self.visible_rows().iter().map(|r| r.key.clone()).collect()
     }
 
+    fn target_of(&self, r: &ResourceRow) -> crate::view::Target {
+        crate::view::Target {
+            kind: self.kind.clone(),
+            ns: self.watched_ns.clone(),
+            name: r.name.clone(),
+        }
+    }
+
     fn restart_watch(&self) -> Cmd {
         Cmd::StartTableWatch {
             view: self.id,
@@ -335,6 +343,13 @@ impl View for ResourcesView {
 
     fn on_pop(&mut self) -> Vec<Cmd> {
         self.stop_old()
+    }
+
+    fn target(&self) -> Option<crate::view::Target> {
+        let rows = self.visible_rows();
+        rows.iter()
+            .find(|r| Some(r.key.as_str()) == self.selected.as_deref())
+            .map(|r| self.target_of(r))
     }
 
     fn render(&self, f: &mut Frame, area: Rect, th: &Theme, filter: &str) {

@@ -223,3 +223,98 @@ fn age_column_sorts_by_creation() {
     assert!(api_pos < web_pos, "{text}");
     let _ = ctx;
 }
+
+#[test]
+fn yaml_view_renders_syntax_text() {
+    let mut app = test_app();
+    let target = kxs_tui::view::Target {
+        kind: pod_kind(),
+        ns: Some("default".into()),
+        name: "web".into(),
+    };
+    let view = kxs_tui::views::yaml::YamlView::new(&mut app, &target);
+    let id = view.id();
+    app.push_view(Box::new(view));
+    app.update(Msg::Fetched {
+        view: id,
+        result: Ok(kxs_tui::cmd::FetchResult::Yaml(
+            "apiVersion: v1\nkind: Pod\n# a comment\nmetadata:\n  name: web\n".into(),
+        )),
+    });
+    let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    term.draw(|f| app.render(f)).unwrap();
+    let text = buf_text(&term);
+    assert!(text.contains("YAML(Pod/web)"), "{text}");
+    assert!(text.contains("apiVersion"), "{text}");
+    assert!(text.contains("# a comment"), "{text}");
+    assert!(text.contains("name: web"), "{text}");
+}
+
+#[test]
+fn describe_view_renders_plain_text() {
+    let mut app = test_app();
+    let target = kxs_tui::view::Target {
+        kind: pod_kind(),
+        ns: Some("default".into()),
+        name: "web".into(),
+    };
+    let view = kxs_tui::views::describe::DescribeView::new(&mut app, &target);
+    let id = view.id();
+    app.push_view(Box::new(view));
+    app.update(Msg::Fetched {
+        view: id,
+        result: Ok(kxs_tui::cmd::FetchResult::Describe(
+            "Name: web\nNode: kind-worker\n".into(),
+        )),
+    });
+    let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    term.draw(|f| app.render(f)).unwrap();
+    let text = buf_text(&term);
+    assert!(text.contains("Describe(Pod/web)"), "{text}");
+    assert!(text.contains("Name: web"), "{text}");
+    assert!(text.contains("Node: kind-worker"), "{text}");
+}
+
+#[test]
+fn d_key_pushes_describe_and_fetches() {
+    let mut app = test_app();
+    let view = resources_view(&mut app);
+    let id = view.id();
+    app.push_view(view);
+    app.update(Msg::Table {
+        view: id,
+        ev: TableEvent::Table {
+            table: fixture_table(),
+        },
+    });
+    let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Char('d'))));
+    // stack now has the Describe view on top, with a Fetch queued
+    assert_eq!(app.views.len(), 2);
+    assert_eq!(app.views[1].crumb(), "describe");
+    assert!(cmds
+        .iter()
+        .any(|c| matches!(c, kxs_tui::cmd::Cmd::Fetch { .. })));
+}
+
+#[test]
+fn y_key_pushes_yaml_and_fetches() {
+    let mut app = test_app();
+    let view = resources_view(&mut app);
+    let id = view.id();
+    app.push_view(view);
+    app.update(Msg::Table {
+        view: id,
+        ev: TableEvent::Table {
+            table: fixture_table(),
+        },
+    });
+    let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Char('y'))));
+    assert_eq!(app.views.len(), 2);
+    assert_eq!(app.views[1].crumb(), "yaml");
+    assert!(cmds
+        .iter()
+        .any(|c| matches!(c, kxs_tui::cmd::Cmd::Fetch { .. })));
+    // Esc pops back to the table
+    app.update(Msg::Key(KeyEvent::from(KeyCode::Esc)));
+    assert_eq!(app.views.len(), 1);
+}

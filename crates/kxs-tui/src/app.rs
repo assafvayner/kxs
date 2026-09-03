@@ -310,12 +310,45 @@ impl App {
             }
             _ => {}
         }
-        // 3. top view
+        // 3. resource actions handled at app level (need the target + stack push)
+        if matches!(key.code, KeyCode::Char('d') | KeyCode::Char('y')) {
+            let target = self.views.last().and_then(|v| v.target());
+            if let Some(t) = target {
+                return self.open_text_view(&t, key.code == KeyCode::Char('d'));
+            }
+        }
+        // 4. top view
         let ctx = self.ctx();
         match self.views.last_mut() {
             Some(v) => v.handle_key(key, &ctx),
             None => vec![],
         }
+    }
+
+    /// `d` → Describe, `y` → YAML: push the view and fetch its text.
+    fn open_text_view(&mut self, target: &crate::view::Target, describe: bool) -> Vec<Cmd> {
+        let (view, what) = if describe {
+            let v = crate::views::describe::DescribeView::new(self, target);
+            let what = crate::cmd::Fetch::Describe {
+                kind: target.kind.clone(),
+                ns: target.ns.clone(),
+                name: target.name.clone(),
+            };
+            (Box::new(v) as Box<dyn View>, what)
+        } else {
+            let v = crate::views::yaml::YamlView::new(self, target);
+            let what = crate::cmd::Fetch::Yaml {
+                kind: target.kind.clone(),
+                ns: target.ns.clone(),
+                name: target.name.clone(),
+            };
+            (Box::new(v) as Box<dyn View>, what)
+        };
+        let mut cmds = self.push_view(view);
+        if let Some(id) = self.views.last().map(|v| v.id()) {
+            cmds.push(Cmd::Fetch { view: id, what });
+        }
+        cmds
     }
 
     fn top_view(&mut self) -> Option<&mut Box<dyn View>> {

@@ -1,5 +1,7 @@
 use ratatui::crossterm::event::KeyEvent;
 
+use kxs_cluster::discovery::ResourceKind;
+
 use crate::cmd::Cmd;
 use crate::theme::Theme;
 use crate::AppCtx;
@@ -9,6 +11,14 @@ pub type ViewId = u64;
 pub struct Hint {
     pub key: &'static str,
     pub desc: &'static str,
+}
+
+/// The resource row a view's keys act on (used by the app for `d`/`y`/`e`).
+#[derive(Debug, Clone)]
+pub struct Target {
+    pub kind: ResourceKind,
+    pub ns: Option<String>,
+    pub name: String,
 }
 
 pub trait View {
@@ -40,6 +50,10 @@ pub trait View {
     /// Whether the `/` filter applies to this view (Help: no).
     fn wants_filter(&self) -> bool {
         true
+    }
+    /// The selected resource row, if this view is a resource listing.
+    fn target(&self) -> Option<Target> {
+        None
     }
     /// Current filter text, shown in the title row.
     fn filter(&self) -> String {
