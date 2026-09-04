@@ -687,6 +687,14 @@ impl Runtime {
                 app.preview_theme(&id);
                 Ok(false)
             }
+            Cmd::SetTheme { id } => {
+                app.set_theme(&id);
+                let cfg = self.config.lock().expect("config lock").clone();
+                if let Err(e) = config::write(&cfg) {
+                    app.chrome.flash(format!("config: {e}"), true);
+                }
+                Ok(false)
+            }
             Cmd::PollMetrics { view, every } => {
                 // one poller per session; abort the previous on :ctx switch
                 if let Some(prev) = self.metrics_poller.take() {

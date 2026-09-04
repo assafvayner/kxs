@@ -274,15 +274,12 @@ impl App {
             .open_pick(format!("Exec({ns}/{pod})"), options, view);
     }
 
-    /// Live theme preview (ThemePicker `j/k`). Enter keeps it (SaveConfig
-    /// serializes this), Esc previews the original id again.
+    /// Live theme preview (ThemePicker `j/k`). Never touches the config;
+    /// Enter persists via `Cmd::SetTheme`, Esc previews the original id again.
     pub fn preview_theme(&mut self, id: &str) {
         let th = crate::theme::get(id);
         if th.id == id {
             self.theme = th;
-            if let Ok(mut cfg) = self.config.lock() {
-                cfg.theme = Some(id.to_string());
-            }
         }
     }
 
@@ -753,6 +750,13 @@ impl App {
             KeyCode::Char('[') => return self.history_step(-1),
             KeyCode::Char(']') => return self.history_step(1),
             KeyCode::Esc => {
+                if self.top_view().is_some_and(|v| v.wants_esc()) {
+                    let ctx = self.ctx();
+                    return match self.views.last_mut() {
+                        Some(v) => v.handle_key(key, &ctx),
+                        None => vec![],
+                    };
+                }
                 return self.esc_cascade();
             }
             KeyCode::Char(c @ '0'..='9')
@@ -1689,6 +1693,28 @@ mod tests {
         let crumbs: Vec<String> = app.views.iter().map(|v| v.crumb()).collect();
         assert_eq!(crumbs, vec!["pods", "ns"]);
         assert!(cmds.iter().any(|c| matches!(c, Cmd::PollMetrics { .. })));
+    }
+
+    #[test]
+    fn theme_picker_esc_reverts_preview_without_saving() {
+        let mut app = test_app();
+        let original = app.theme.id.clone();
+        let view = Box::new(crate::views::theme_picker::ThemePicker::new(&mut app));
+        app.push_view(view);
+        let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Char('j'))));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::PreviewTheme { .. })));
+        app.preview_theme("darcula");
+        assert_eq!(app.theme.id, "darcula");
+        assert_eq!(
+            app.config.lock().unwrap().theme,
+            None,
+            "preview must not touch config"
+        );
+        let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Esc)));
+        assert!(cmds
+            .iter()
+            .any(|c| matches!(c, Cmd::PreviewTheme { id } if *id == original)));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::PopView)));
     }
 
     #[test]

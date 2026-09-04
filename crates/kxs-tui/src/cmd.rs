@@ -249,6 +249,10 @@ pub enum Cmd {
     PreviewTheme {
         id: String,
     },
+    /// Apply and persist a theme (ThemePicker Enter).
+    SetTheme {
+        id: String,
+    },
     /// Repeating metrics poll for the header and the Metrics view.
     PollMetrics {
         view: ViewId,

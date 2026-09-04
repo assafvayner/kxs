@@ -116,6 +116,10 @@ pub trait View {
         let _ = filter;
         vec![]
     }
+    /// Views that handle Esc themselves (ThemePicker reverts its preview).
+    fn wants_esc(&self) -> bool {
+        false
+    }
 }
 
 /// Title suffix for a watch status event. `live`/`connected` clear the

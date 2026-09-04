@@ -22,10 +22,15 @@ pub struct ThemePicker {
 
 impl ThemePicker {
     pub fn new(app: &mut crate::app::App) -> Self {
+        let themes = all();
+        let selected = themes
+            .iter()
+            .position(|t| t.id == app.theme.id)
+            .unwrap_or(0);
         ThemePicker {
             id: app.alloc_id(),
-            themes: all(),
-            selected: 0,
+            themes,
+            selected,
             original: app.theme.id.clone(),
         }
     }
@@ -64,8 +69,7 @@ impl View for ThemePicker {
                     // re-anchor: a later Esc must revert to the applied
                     // theme, not the pre-picker one (disk already has it)
                     self.original = t.id.clone();
-                    cmds.push(Cmd::PreviewTheme { id: t.id.clone() });
-                    cmds.push(Cmd::SaveConfig);
+                    cmds.push(Cmd::SetTheme { id: t.id.clone() });
                 }
                 return cmds;
             }
@@ -87,6 +91,10 @@ impl View for ThemePicker {
 
     fn wants_filter(&self) -> bool {
         false
+    }
+
+    fn wants_esc(&self) -> bool {
+        true
     }
 
     fn render(&self, f: &mut Frame, area: Rect, th: &Theme, _filter: &str) {
