@@ -82,4 +82,6 @@ pub enum Msg {
         text: String,
     },
     KubeconfigChanged,
+    /// The active namespace changed; views restart namespaced watches.
+    NamespaceChanged,
 }

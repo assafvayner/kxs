@@ -149,6 +149,19 @@ impl PodsView {
         }
     }
 
+    /// Follow the active namespace: stop the old watch, clear stale rows, start anew.
+    fn sync_namespace(&mut self, ctx: &AppCtx) -> Vec<Cmd> {
+        if self.selector_pending || ctx.namespace == self.watched_ns {
+            return vec![];
+        }
+        self.watched_ns = ctx.namespace.clone();
+        self.rows.clear();
+        self.selected = None;
+        let mut cmds = self.stop_old();
+        cmds.push(self.restart_watch());
+        cmds
+    }
+
     fn stop_old(&mut self) -> Vec<Cmd> {
         match self.handle.take() {
             Some(h) => vec![Cmd::Stop(h)],
@@ -448,14 +461,9 @@ impl View for PodsView {
                 if self.handle.is_none() && !self.pending {
                     return vec![self.restart_watch()];
                 }
-                if self.handle.is_some() && ctx.namespace != self.watched_ns {
-                    self.watched_ns = ctx.namespace.clone();
-                    let mut cmds = self.stop_old();
-                    cmds.push(self.restart_watch());
-                    return cmds;
-                }
-                vec![]
+                self.sync_namespace(ctx)
             }
+            crate::msg::Msg::NamespaceChanged => self.sync_namespace(ctx),
             crate::msg::Msg::Pod { ev, .. } => {
                 use kxs_cluster::pods::PodEvent::*;
                 match ev {

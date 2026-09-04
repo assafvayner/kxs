@@ -127,7 +127,7 @@ impl App {
         cmds
     }
 
-    fn sync_chrome(&mut self) {
+    pub fn sync_chrome(&mut self) {
         let s = self.sessions.lock().expect("sessions lock");
         if let Some(active) = &s.active {
             self.chrome.context = active.name.clone();
@@ -234,32 +234,45 @@ impl App {
         }
     }
 
-    /// Set the active namespace (`0`–`9` favorites, Namespaces view).
-    pub fn set_namespace(&mut self, ns: Option<String>) {
-        let mut s = self.sessions.lock().expect("sessions lock");
-        if let Some(active) = &mut s.active {
-            active.namespace = ns;
+    /// Set the active namespace and restart every namespaced watch right away.
+    /// Also remembers it (and the favorites MRU) for this context.
+    pub fn set_namespace(&mut self, ns: Option<String>) -> Vec<Cmd> {
+        {
+            let mut s = self.sessions.lock().expect("sessions lock");
+            match &mut s.active {
+                Some(active) if active.namespace != ns => active.namespace = ns.clone(),
+                _ => return vec![],
+            }
         }
-        drop(s);
         self.sync_chrome();
+        self.remember_namespace(ns);
+        self.sync_chrome();
+        let ctx = self.ctx();
+        let mut cmds: Vec<Cmd> = self
+            .views
+            .iter_mut()
+            .flat_map(|v| v.on_msg(&Msg::NamespaceChanged, &ctx))
+            .collect();
+        cmds.push(Cmd::SaveConfig);
+        cmds
     }
 
-    /// Push a namespace onto the per-context favorites (MRU, max 9).
-    pub fn record_favorite(&mut self, ns: Option<String>) {
-        let Some(name) = ns else { return };
+    /// Per-context memory: the namespace itself and the favorites MRU (max 9).
+    fn remember_namespace(&mut self, ns: Option<String>) {
         let context = self.chrome.context.clone();
         if context.is_empty() {
             return;
         }
         let mut cfg = self.config.lock().expect("config lock");
         let entry = cfg.contexts.entry(context).or_default();
-        if let Some(pos) = entry.favorites.iter().position(|f| *f == name) {
-            entry.favorites.remove(pos);
+        entry.namespace = ns.clone();
+        if let Some(name) = ns {
+            if let Some(pos) = entry.favorites.iter().position(|f| *f == name) {
+                entry.favorites.remove(pos);
+            }
+            entry.favorites.insert(0, name);
+            entry.favorites.truncate(9);
         }
-        entry.favorites.insert(0, name);
-        entry.favorites.truncate(9);
-        drop(cfg);
-        self.sync_chrome();
     }
 
     /// Container picker for exec.
@@ -481,6 +494,8 @@ impl App {
                 self.chrome.flash("kubeconfig reloaded", false);
                 vec![]
             }
+            // Only ever emitted from `set_namespace`, which broadcasts it itself.
+            Msg::NamespaceChanged => vec![],
         }
     }
 
@@ -912,15 +927,13 @@ impl App {
 
     fn favorite_key(&mut self, c: char) -> Vec<Cmd> {
         if c == '0' {
-            self.set_namespace(None);
-            return vec![];
+            return self.set_namespace(None);
         }
         let idx = c as usize - '1' as usize;
         match self.chrome.favorites.get(idx) {
             Some(ns) => {
                 let ns = ns.clone();
-                self.set_namespace(Some(ns));
-                vec![]
+                self.set_namespace(Some(ns))
             }
             None => {
                 self.chrome
@@ -977,10 +990,7 @@ impl App {
                 }
             },
             "ns" | "namespace" | "namespaces" => match arg {
-                Some(ns) => {
-                    self.set_namespace(Some(ns.to_string()));
-                    vec![]
-                }
+                Some(ns) => self.set_namespace(Some(ns.to_string())),
                 None => {
                     let view = Box::new(crate::views::namespaces::NamespacesView::new(self));
                     self.push_view(view)
@@ -1049,9 +1059,11 @@ impl App {
                 .flash(format!("unknown command or kind: {head}"), true);
             return vec![];
         }
-        if ns.is_some() {
-            self.set_namespace(ns);
-        }
+        let mut cmds = if ns.is_some() {
+            self.set_namespace(ns)
+        } else {
+            vec![]
+        };
         let kinds = self.ctx().kinds;
         let view: Box<dyn View> = match kxs_cluster::command::resolve_kind(&kinds, head) {
             Some(kind) if kind.kind == "Pod" && kind.group.is_empty() => Box::new(
@@ -1069,7 +1081,7 @@ impl App {
         if let Some(kind) = kxs_cluster::command::resolve_kind(&kinds, head) {
             self.remember_last_kind(&kind.plural);
         }
-        let mut cmds = self.replace_views(vec![view]);
+        cmds.extend(self.replace_views(vec![view]));
         cmds.push(Cmd::SaveConfig);
         if let Some(filter) = filter {
             if let Some(v) = self.views.last_mut() {
@@ -1402,12 +1414,15 @@ impl App {
         match &t.ns {
             Some(ns) => {
                 let ns = ns.clone();
-                self.set_namespace(Some(ns.clone()));
+                let cmds = self.set_namespace(Some(ns.clone()));
                 self.chrome.flash(format!("namespace {ns}"), false);
+                cmds
             }
-            None => self.chrome.flash("row has no namespace", false),
+            None => {
+                self.chrome.flash("row has no namespace", false);
+                vec![]
+            }
         }
-        vec![]
     }
 
     /// `ctrl-s`: dump the selected resource's YAML to a file.
@@ -1440,12 +1455,14 @@ impl App {
 
     /// Opens `kind` narrowed to a single name; used by jump-to-owner and `z`.
     pub fn open_kind_filtered(&mut self, kind: &str, ns: Option<String>, name: &str) -> Vec<Cmd> {
-        if ns.is_some() {
-            self.set_namespace(ns);
-        }
+        let mut cmds = if ns.is_some() {
+            self.set_namespace(ns)
+        } else {
+            vec![]
+        };
         match crate::views::resources::open(self, kind, None) {
             Some(view) => {
-                let mut cmds = self.replace_views(vec![view]);
+                cmds.extend(self.replace_views(vec![view]));
                 if let Some(v) = self.views.last_mut() {
                     cmds.extend(v.set_filter(name));
                 }
@@ -1851,5 +1868,34 @@ mod tests {
         app.set_readonly_override(true);
         assert!(app.ctx().readonly);
         assert!(!app.config.lock().unwrap().readonly);
+    }
+
+    #[test]
+    fn set_namespace_restarts_watches_immediately_and_saves() {
+        let mut app = test_app();
+        {
+            let mut s = app.sessions.lock().unwrap();
+            s.active = Some(crate::sessions::ActiveContext {
+                name: "kind-local".into(),
+                namespace: Some("default".into()),
+                version: "v1".into(),
+            });
+        }
+        app.sync_chrome();
+        let mut view = crate::views::pods::PodsView::new(&mut app, Some("default".into()));
+        // pretend the watch is running
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        view.on_started(crate::cmd::StopHandle(tx), &app.ctx());
+        app.push_view(Box::new(view));
+        let cmds = app.set_namespace(Some("kube-system".into()));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Stop(_))));
+        assert!(cmds
+            .iter()
+            .any(|c| matches!(c, Cmd::StartPodWatch { ns: Some(ns), .. } if ns == "kube-system")));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::SaveConfig)));
+        let cfg = app.config.lock().unwrap();
+        let c = &cfg.contexts["kind-local"];
+        assert_eq!(c.namespace.as_deref(), Some("kube-system"));
+        assert_eq!(c.favorites, vec!["kube-system".to_string()]);
     }
 }

@@ -88,7 +88,7 @@ impl View for NamespacesView {
             KeyCode::Enter | KeyCode::Char('u') => {
                 return match visible.get(self.selected) {
                     Some(ns) => {
-                        vec![Cmd::SwitchNamespace { ns: ns.clone() }]
+                        vec![Cmd::SwitchNamespace { ns: ns.clone() }, Cmd::PopView]
                     }
                     None => vec![],
                 };

@@ -774,11 +774,11 @@ impl Runtime {
                 Ok(false)
             }
             Cmd::SwitchNamespace { ns } => {
-                app.set_namespace(ns.clone());
-                app.record_favorite(ns);
-                let cfg = self.config.lock().expect("config lock").clone();
-                if let Err(e) = config::write(&cfg) {
-                    app.chrome.flash(format!("config: {e}"), true);
+                let cmds = app.set_namespace(ns);
+                for c in cmds {
+                    if Box::pin(self.execute(c, app)).await? {
+                        return Ok(true);
+                    }
                 }
                 Ok(false)
             }
