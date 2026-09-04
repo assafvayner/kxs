@@ -201,56 +201,43 @@ impl PodsView {
         cells
     }
 
-    /// Column widths per `columns()`; NAME absorbs slack, AGE kept last.
-    fn layout(&self, total: u16, all_ns: bool, rows: &[PodRow], now_ms: i64) -> Vec<u16> {
-        if rows.is_empty() {
-            return vec![];
-        }
-        let first = self.cells(all_ns, &rows[0], now_ms);
-        let mut widths: Vec<u16> = first
+    /// Display columns as (column index, width). NAME absorbs slack; columns
+    /// are dropped right-to-left but NAMESPACE, NAME and AGE always stay.
+    fn layout(&self, total: u16, all_ns: bool, cells: &[Vec<String>]) -> Vec<(usize, u16)> {
+        let cols = self.columns(all_ns);
+        let name_idx = if all_ns { 1 } else { 0 };
+        let mut out: Vec<(usize, u16)> = cols
             .iter()
             .enumerate()
-            .map(|(i, _)| {
-                let header = self.columns(all_ns)[i].chars().count() as u16;
-                let widest = rows
+            .map(|(i, h)| {
+                let widest = cells
                     .iter()
-                    .map(|r| {
-                        self.cells(all_ns, r, now_ms)
-                            .get(i)
-                            .map(|c| c.chars().count() as u16)
-                            .unwrap_or(0)
-                    })
+                    .map(|c| c.get(i).map_or(0, |s| s.chars().count() as u16))
                     .max()
                     .unwrap_or(0);
-                header.max(widest).min(60)
+                (i, (h.chars().count() as u16).max(widest).min(60))
             })
             .collect();
-        if widths.is_empty() {
-            return widths;
-        }
         let overhead = |n: usize| 2u16 + (n as u16).saturating_sub(1);
-        let age_idx = widths.len() - 1;
-        while !self.wide && widths.len() > 2 {
-            let n = widths.len();
-            let needed: u16 = widths.iter().sum::<u16>() + overhead(n);
+        while !self.wide && out.len() > name_idx + 2 {
+            let needed: u16 = out.iter().map(|(_, w)| *w).sum::<u16>() + overhead(out.len());
             if needed <= total {
                 break;
             }
-            // drop from the right, never NAME (0) or AGE (last)
-            let drop_at = (n - 2).max(1);
-            if drop_at == 0 {
-                break;
-            }
-            widths.remove(drop_at);
+            let n = out.len();
+            out.remove(n - 2); // rightmost column before AGE
         }
-        if widths.len() > 2 {
-            let n = widths.len();
-            let others: u16 = widths[1..].iter().sum();
-            let avail = total.saturating_sub(overhead(n));
-            widths[0] = avail.saturating_sub(others).max(4);
-        }
-        let _ = age_idx;
-        widths
+        let n = out.len();
+        let pos = out.iter().position(|(i, _)| *i == name_idx).unwrap_or(0);
+        let others: u16 = out
+            .iter()
+            .enumerate()
+            .filter(|(p, _)| *p != pos)
+            .map(|(_, (_, w))| *w)
+            .sum();
+        let avail = total.saturating_sub(overhead(n));
+        out[pos].1 = avail.saturating_sub(others).max(4);
+        out
     }
 
     fn visible_rows(&self) -> Vec<PodRow> {
@@ -757,30 +744,31 @@ impl View for PodsView {
         let all_ns = self.watched_ns.is_none();
         let now_ms = kxs_cluster::clock::now_ms();
         let rows_sorted = self.visible_rows();
-        let widths = self.layout(area.width, all_ns, &rows_sorted, now_ms);
+        let cells: Vec<Vec<String>> = rows_sorted
+            .iter()
+            .map(|p| self.cells(all_ns, p, now_ms))
+            .collect();
+        let widths = self.layout(area.width, all_ns, &cells);
         let cols = self.columns(all_ns);
         let header_cells: Vec<Span> = widths
             .iter()
-            .enumerate()
             .map(|(i, _)| {
-                let indicator = match sort_field_index(i, all_ns) {
+                let indicator = match sort_field_index(*i, all_ns) {
                     Some(field) => sort_indicator_of(self.sort, field),
                     None => String::new(),
                 };
                 Span::styled(
-                    format!("{}{}", cols[i], indicator),
+                    format!("{}{}", cols[*i], indicator),
                     Style::new().fg(th.colors.fg_dim).bold(),
                 )
             })
             .collect();
-        let rows = rows_sorted.iter().map(|p| {
-            let cells = self.cells(all_ns, p, now_ms);
+        let rows = rows_sorted.iter().zip(cells.iter()).map(|(p, cells)| {
             let spans: Vec<Span> = widths
                 .iter()
-                .enumerate()
                 .map(|(i, w)| {
-                    let text = truncate_cell(cells.get(i).map(String::as_str).unwrap_or(""), *w);
-                    let style = if cols[i] == "STATUS" {
+                    let text = truncate_cell(cells.get(*i).map(String::as_str).unwrap_or(""), *w);
+                    let style = if cols[*i] == "STATUS" {
                         status_style(&p.status, th)
                     } else {
                         None
@@ -794,7 +782,8 @@ impl View for PodsView {
                 Style::new()
             })
         });
-        let constraints: Vec<Constraint> = widths.iter().map(|w| Constraint::Length(*w)).collect();
+        let constraints: Vec<Constraint> =
+            widths.iter().map(|(_, w)| Constraint::Length(*w)).collect();
         let table = Table::new(rows, constraints)
             .header(Row::new(header_cells))
             .block(block);

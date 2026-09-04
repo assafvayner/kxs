@@ -1420,6 +1420,46 @@ fn pods_cpu_sort_keeps_the_filter() {
 }
 
 #[test]
+fn pods_view_keeps_age_when_narrow() {
+    use kxs_cluster::pods::{PodEvent, PodRow};
+    use kxs_tui::views::pods::PodsView;
+    let mut app = test_app();
+    let mut view = PodsView::new(&mut app, Some("default".into()));
+    let ctx = app.ctx();
+    let id = view.id();
+    let row = PodRow {
+        key: "default/web-1".into(),
+        name: "web-1".into(),
+        namespace: "default".into(),
+        ready: "1/1".into(),
+        status: "Running".into(),
+        restarts: 0,
+        ip: Some("10.244.1.3".into()),
+        node: Some("desktop-worker3".into()),
+        created: Some("2026-09-01T00:00:00Z".into()),
+        cpu_request_millis: None,
+        mem_request_mib: None,
+    };
+    view.on_msg(
+        &Msg::Pod {
+            view: id,
+            ev: PodEvent::Snapshot { rows: vec![row] },
+        },
+        &ctx,
+    );
+    let mut t = Terminal::new(TestBackend::new(70, 8)).unwrap();
+    t.draw(|f| view.render(f, f.area(), &theme::get(theme::DEFAULT_ID), ""))
+        .unwrap();
+    let text = buf_text(&t);
+    let header = text.lines().nth(1).unwrap();
+    assert!(header.contains("AGE"), "{header}");
+    assert!(
+        !header.contains("NODE"),
+        "NODE should be dropped first: {header}"
+    );
+}
+
+#[test]
 fn workload_logs_use_the_workload_namespace() {
     use kxs_tui::cmd::FetchResult;
     use kxs_tui::views::logs::LogsView;
