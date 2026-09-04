@@ -268,14 +268,21 @@ impl View for EventsView {
             .iter()
             .map(|c| (c.chars().count() as u16).max(6))
             .collect();
+        let now_ms = kxs_cluster::clock::now_ms();
+        let age_col = column_index(&t.columns, "Age");
         let rows = visible.iter().map(|r| {
-            let spans: Vec<Span> = r
-                .cells
+            let spans: Vec<Span> = t
+                .columns
                 .iter()
                 .enumerate()
-                .map(|(i, text)| {
+                .map(|(i, _)| {
+                    let text = if i as i32 == age_col {
+                        kxs_core::format::age(r.created.as_deref(), now_ms)
+                    } else {
+                        r.cells.get(i).cloned().unwrap_or_default()
+                    };
                     let style = if i as i32 == type_col {
-                        match event_type_weight(text) {
+                        match event_type_weight(&text) {
                             Weight::Bad => Style::new().fg(th.colors.red),
                             Weight::Warn => Style::new().fg(th.colors.yellow),
                             Weight::Dim => Style::new().fg(th.colors.fg_dim),
@@ -284,7 +291,7 @@ impl View for EventsView {
                     } else {
                         Style::new().fg(th.colors.fg)
                     };
-                    Span::styled(text.clone(), style)
+                    Span::styled(text, style)
                 })
                 .collect();
             Row::new(spans).style(if self.selected.as_deref() == Some(r.key.as_str()) {

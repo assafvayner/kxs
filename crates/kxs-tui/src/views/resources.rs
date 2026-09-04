@@ -103,6 +103,21 @@ impl ResourcesView {
         }
     }
 
+    /// Cell text for display column `ci`; the synthetic Age column is rendered
+    /// from `created`.
+    fn cell_text(&self, r: &ResourceRow, ci: usize, now_ms: i64) -> String {
+        let is_age = self
+            .table
+            .as_ref()
+            .and_then(|t| t.columns.get(ci))
+            .is_some_and(|c| c.trim().eq_ignore_ascii_case("age"));
+        if is_age {
+            kxs_core::format::age(r.created.as_deref(), now_ms)
+        } else {
+            r.cells.get(ci).cloned().unwrap_or_default()
+        }
+    }
+
     /// Display columns as (original cell index, width). Widths are
     /// max(header, widest cell) capped at 60. When the sum exceeds the area,
     /// rightmost non-NAME non-AGE columns are dropped; NAME absorbs the
@@ -110,6 +125,7 @@ impl ResourcesView {
     fn layout(&self, total: u16) -> Vec<(usize, u16)> {
         let Some(t) = &self.table else { return vec![] };
         let map = self.column_map();
+        let now_ms = kxs_cluster::clock::now_ms();
         let mut cols: Vec<(usize, u16)> = map
             .iter()
             .map(|&ci| {
@@ -117,7 +133,7 @@ impl ResourcesView {
                 let widest = t
                     .rows
                     .iter()
-                    .map(|r| r.cells.get(ci).map_or(0, |c| c.chars().count() as u16))
+                    .map(|r| self.cell_text(r, ci, now_ms).chars().count() as u16)
                     .max()
                     .unwrap_or(0);
                 (ci, hdr.max(widest).min(60))
@@ -612,11 +628,12 @@ impl View for ResourcesView {
                 )
             })
             .collect();
+        let now_ms = kxs_cluster::clock::now_ms();
         let rows = visible.iter().map(|r| {
             let cells: Vec<Span> = cols
                 .iter()
                 .map(|(ci, _)| {
-                    let text = r.cells.get(*ci).cloned().unwrap_or_default();
+                    let text = self.cell_text(r, *ci, now_ms);
                     Span::styled(text, Style::new().fg(th.colors.fg))
                 })
                 .collect();

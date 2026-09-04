@@ -124,6 +124,34 @@ fn resources_view_renders_columns_and_rows() {
 }
 
 #[test]
+fn resources_view_renders_age_from_created() {
+    let mut app = test_app();
+    let mut view = resources_view(&mut app);
+    let ctx = app.ctx();
+    let id = view.id();
+    view.on_msg(
+        &Msg::Table {
+            view: id,
+            ev: TableEvent::Table {
+                table: fixture_table(),
+            },
+        },
+        &ctx,
+    );
+    let mut t = Terminal::new(TestBackend::new(100, 10)).unwrap();
+    t.draw(|f| view.render(f, f.area(), &theme::get(theme::DEFAULT_ID), ""))
+        .unwrap();
+    let text = buf_text(&t);
+    let web_line = text.lines().find(|l| l.contains("web-7d9f")).expect("row");
+    let last = web_line.trim_end().trim_end_matches('│').trim_end();
+    assert!(
+        last.ends_with('d'),
+        "age cell should end in days: {web_line}"
+    );
+    assert!(!last.ends_with("Running"), "age cell is empty: {web_line}");
+}
+
+#[test]
 fn resources_view_title_shows_filter() {
     let mut app = test_app();
     let view = resources_view(&mut app);
