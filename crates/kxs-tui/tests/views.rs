@@ -1428,4 +1428,56 @@ fn cluster_scoped_view_ignores_namespace() {
             .any(|c| matches!(c, Cmd::StartTableWatch { ns: None, .. })),
         "cluster-scoped watch must not be namespaced"
     );
+
+    view.on_started(
+        kxs_tui::cmd::StopHandle(tokio::sync::oneshot::channel().0),
+        &ctx,
+    );
+    app.sessions.lock().unwrap().active = Some(kxs_tui::sessions::ActiveContext {
+        name: "c".into(),
+        namespace: Some("kxs-review".into()),
+        version: "v1".into(),
+    });
+    let ctx = app.ctx();
+    let cmds = view.on_msg(&Msg::Tick, &ctx);
+    assert!(
+        cmds.is_empty(),
+        "cluster-scoped view must not follow namespace switches"
+    );
+}
+
+#[test]
+fn containers_target_matches_display_order() {
+    use kxs_cluster::pods::ContainerInfo;
+    use kxs_tui::cmd::FetchResult;
+    use kxs_tui::views::containers::ContainersView;
+    let mut app = test_app();
+    let mut view = ContainersView::new(&mut app, pod_target());
+    let ctx = app.ctx();
+    let id = view.id();
+    let info = |name: &str, init: bool| ContainerInfo {
+        name: name.into(),
+        image: "busybox".into(),
+        ready: !init,
+        state: if init {
+            "terminated".into()
+        } else {
+            "running".into()
+        },
+        restarts: 0,
+        ports: vec![],
+        init_container: init,
+    };
+    view.on_msg(
+        &Msg::Fetched {
+            view: id,
+            result: Ok(FetchResult::Containers(vec![
+                info("migrate", true),
+                info("web", false),
+            ])),
+        },
+        &ctx,
+    );
+    // first row shown is the regular container
+    assert_eq!(view.target().unwrap().container.as_deref(), Some("web"));
 }

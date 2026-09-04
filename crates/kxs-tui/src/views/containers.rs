@@ -98,7 +98,15 @@ impl View for ContainersView {
                 self.in_flight = false;
                 match result {
                     Ok(crate::cmd::FetchResult::Containers(infos)) => {
-                        self.containers = infos.clone()
+                        // regular containers first, init containers last: the same order render uses
+                        let mut ordered: Vec<ContainerInfo> = infos
+                            .iter()
+                            .filter(|c| !c.init_container)
+                            .cloned()
+                            .collect();
+                        ordered.extend(infos.iter().filter(|c| c.init_container).cloned());
+                        self.containers = ordered;
+                        self.selected = self.selected.min(self.containers.len().saturating_sub(1));
                     }
                     Err(e) => self.error = Some(e.clone()),
                     _ => {}
@@ -143,16 +151,17 @@ impl View for ContainersView {
             );
             return;
         }
-        // regular containers first, init containers after, marked
-        let mut ordered: Vec<&ContainerInfo> = self
-            .containers
-            .iter()
-            .filter(|c| !c.init_container)
-            .collect();
-        ordered.extend(self.containers.iter().filter(|c| c.init_container));
-        let rows = ordered.iter().enumerate().map(|(i, c)| {
+        let rows = self.containers.iter().enumerate().map(|(i, c)| {
             let init = if c.init_container { "init" } else { "" };
-            let state = if c.ready { "running" } else { "waiting" };
+            let state = if c.state.is_empty() {
+                if c.ready {
+                    "running"
+                } else {
+                    "waiting"
+                }
+            } else {
+                c.state.as_str()
+            };
             let ports = c
                 .ports
                 .iter()
