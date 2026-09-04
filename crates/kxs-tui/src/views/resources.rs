@@ -187,6 +187,18 @@ impl ResourcesView {
         self.visible_rows().iter().position(|r| r.key == sel)
     }
 
+    /// Keep the selection on a visible row: unchanged if still visible, else the
+    /// first visible row, else none.
+    fn fix_selection(&mut self) {
+        let keys = self.keys();
+        if !keys
+            .iter()
+            .any(|k| Some(k.as_str()) == self.selected.as_deref())
+        {
+            self.selected = keys.first().cloned();
+        }
+    }
+
     fn target_of(&self, r: &ResourceRow) -> crate::view::Target {
         crate::view::Target {
             kind: self.kind.clone(),
@@ -504,15 +516,8 @@ impl View for ResourcesView {
             crate::msg::Msg::Table { ev, .. } => match ev {
                 TableEvent::Table { table } => {
                     self.status = None;
-                    // selection survives re-sorts and watch updates by key
-                    if self
-                        .selected
-                        .as_ref()
-                        .is_none_or(|sel| !table.rows.iter().any(|r| &r.key == sel))
-                    {
-                        self.selected = table.rows.first().map(|r| r.key.clone());
-                    }
                     self.table = Some(table.clone());
+                    self.fix_selection();
                     vec![]
                 }
                 TableEvent::Status { state, message } => {
@@ -534,14 +539,7 @@ impl View for ResourcesView {
         let selector_changed = labels != self.labels;
         self.labels = labels;
         self.name_filter = name;
-        // keep the selection if it survives the filter, else take the first visible
-        let keys = self.keys();
-        if !keys
-            .iter()
-            .any(|k| Some(k.as_str()) == self.selected.as_deref())
-        {
-            self.selected = keys.first().cloned();
-        }
+        self.fix_selection();
         if selector_changed {
             let mut cmds = self.stop_old();
             cmds.push(self.restart_watch());
@@ -566,13 +564,7 @@ impl View for ResourcesView {
 
     fn toggle_faults(&mut self) -> Option<bool> {
         self.faults_only = !self.faults_only;
-        let keys = self.keys();
-        if !keys
-            .iter()
-            .any(|k| Some(k.as_str()) == self.selected.as_deref())
-        {
-            self.selected = keys.first().cloned();
-        }
+        self.fix_selection();
         Some(self.faults_only)
     }
 

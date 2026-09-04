@@ -97,6 +97,18 @@ impl EventsView {
         let sel = self.selected.as_deref()?;
         self.visible().iter().position(|r| r.key == sel)
     }
+
+    /// Keep the selection on a visible row: unchanged if still visible, else the
+    /// first visible row, else none.
+    fn fix_selection(&mut self) {
+        let keys = self.keys();
+        if !keys
+            .iter()
+            .any(|k| Some(k.as_str()) == self.selected.as_deref())
+        {
+            self.selected = keys.first().cloned();
+        }
+    }
 }
 
 pub fn events_kind() -> ResourceKind {
@@ -203,14 +215,8 @@ impl View for EventsView {
             crate::msg::Msg::Table { ev, .. } => match ev {
                 TableEvent::Table { table } => {
                     self.status = None;
-                    if self
-                        .selected
-                        .as_ref()
-                        .is_none_or(|sel| !table.rows.iter().any(|r| &r.key == sel))
-                    {
-                        self.selected = table.rows.first().map(|r| r.key.clone());
-                    }
                     self.table = Some(table.clone());
+                    self.fix_selection();
                     vec![]
                 }
                 TableEvent::Status { state, message } => {
@@ -224,6 +230,7 @@ impl View for EventsView {
 
     fn set_filter(&mut self, filter: &str) -> Vec<Cmd> {
         self.filter = filter.to_string();
+        self.fix_selection();
         vec![]
     }
 

@@ -1235,3 +1235,57 @@ fn events_view_shows_full_message_column() {
         "{text}"
     );
 }
+
+#[test]
+fn resources_selection_after_snapshot_respects_filter() {
+    let mut app = test_app();
+    let mut view = resources_view(&mut app);
+    let ctx = app.ctx();
+    let id = view.id();
+    view.set_filter("api");
+    view.on_msg(
+        &Msg::Table {
+            view: id,
+            ev: TableEvent::Table {
+                table: fixture_table(),
+            },
+        },
+        &ctx,
+    );
+    let target = view.target().expect("target");
+    assert_eq!(target.name, "api-xyz");
+}
+
+#[test]
+fn pods_selection_after_snapshot_respects_filter() {
+    use kxs_cluster::pods::{PodEvent, PodRow};
+    use kxs_tui::views::pods::PodsView;
+    let mut app = test_app();
+    let mut view = PodsView::new(&mut app, Some("default".into()));
+    let ctx = app.ctx();
+    let id = view.id();
+    let row = |name: &str| PodRow {
+        key: format!("default/{name}"),
+        name: name.into(),
+        namespace: "default".into(),
+        ready: "1/1".into(),
+        status: "Running".into(),
+        restarts: 0,
+        ip: None,
+        node: None,
+        created: Some("2026-09-01T00:00:00Z".into()),
+        cpu_request_millis: None,
+        mem_request_mib: None,
+    };
+    view.set_filter("web");
+    view.on_msg(
+        &Msg::Pod {
+            view: id,
+            ev: PodEvent::Snapshot {
+                rows: vec![row("agent-1"), row("web-1")],
+            },
+        },
+        &ctx,
+    );
+    assert_eq!(view.target().expect("target").name, "web-1");
+}

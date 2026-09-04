@@ -268,7 +268,7 @@ impl PodsView {
         match col {
             SortCol::Cpu | SortCol::Mem => {
                 let mem = col == SortCol::Mem;
-                let mut rows = self.rows.clone();
+                let mut rows = base;
                 rows.sort_by(|x, y| {
                     let get = |r: &PodRow| -> Option<u64> {
                         let m = self.metrics.get(&r.key)?;
@@ -303,6 +303,18 @@ impl PodsView {
                 };
                 sort_pods(&base, field, dir)
             }
+        }
+    }
+
+    /// Keep the selection on a visible row: unchanged if still visible, else the
+    /// first visible row, else none.
+    fn fix_selection(&mut self) {
+        let keys = self.keys();
+        if !keys
+            .iter()
+            .any(|k| Some(k.as_str()) == self.selected.as_deref())
+        {
+            self.selected = keys.first().cloned();
         }
     }
 
@@ -458,9 +470,7 @@ impl View for PodsView {
                         self.rows = rows.clone();
                         self.status = None;
                         self.loaded = true;
-                        if self.selected.is_none() {
-                            self.selected = self.rows.first().map(|r| r.key.clone());
-                        }
+                        self.fix_selection();
                     }
                     Upsert { rows } => {
                         for r in rows {
@@ -469,14 +479,11 @@ impl View for PodsView {
                                 None => self.rows.push(r.clone()),
                             }
                         }
+                        self.fix_selection();
                     }
                     Delete { keys } => {
                         self.rows.retain(|r| !keys.contains(&r.key));
-                        if let Some(sel) = &self.selected {
-                            if keys.contains(sel) {
-                                self.selected = self.rows.first().map(|r| r.key.clone());
-                            }
-                        }
+                        self.fix_selection();
                     }
                     Status { state, message } => {
                         self.status = crate::view::status_suffix(state, message.as_deref());
@@ -663,14 +670,7 @@ impl View for PodsView {
         let selector_changed = labels != self.filter_selector;
         self.filter_selector = labels;
         self.name_filter = name;
-        // keep the selection if it survives the filter, else take the first visible
-        let keys = self.keys();
-        if !keys
-            .iter()
-            .any(|k| Some(k.as_str()) == self.selected.as_deref())
-        {
-            self.selected = keys.first().cloned();
-        }
+        self.fix_selection();
         if selector_changed {
             let mut cmds = self.stop_old();
             cmds.push(self.restart_watch());
@@ -699,19 +699,13 @@ impl View for PodsView {
 
     fn toggle_faults(&mut self) -> Option<bool> {
         self.faults_only = !self.faults_only;
-        let keys = self.keys();
-        if !keys
-            .iter()
-            .any(|k| Some(k.as_str()) == self.selected.as_deref())
-        {
-            self.selected = keys.first().cloned();
-        }
+        self.fix_selection();
         Some(self.faults_only)
     }
 
     fn target(&self) -> Option<Target> {
-        let row = self
-            .rows
+        let rows = self.visible_rows();
+        let row = rows
             .iter()
             .find(|r| Some(r.key.as_str()) == self.selected.as_deref())?;
         Some(Target {
