@@ -270,15 +270,17 @@ pub async fn run_edit(
         &name,
     )
     .await?;
-    let path = std::env::temp_dir().join(format!(
-        "kxs-{}-{}-{}.yaml",
-        kind.plural,
-        name,
-        std::process::id()
-    ));
+    // NamedTempFile creates the file atomically with restrictive permissions
+    // and removes it on every return path, including editor/read failures.
+    let mut file = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+    use std::os::unix::fs::PermissionsExt;
+    file.as_file()
+        .set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| e.to_string())?;
+    let path = file.path().to_path_buf();
     let mut current = yaml.clone();
     let outcome = loop {
-        write_secret_file(&path, &current)?;
+        write_secret_file(&mut file, &current)?;
         let editor = std::env::var("KUBE_EDITOR")
             .or_else(|_| std::env::var("EDITOR"))
             .unwrap_or_else(|_| "vi".into());
@@ -321,15 +323,14 @@ pub async fn run_edit(
             }
         }
     };
-    let _ = std::fs::remove_file(&path);
     outcome
 }
 
-fn write_secret_file(path: &std::path::Path, content: &str) -> Result<(), String> {
-    use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
-    let mut f = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    f.set_permissions(std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| e.to_string())?;
-    f.write_all(content.as_bytes()).map_err(|e| e.to_string())
+fn write_secret_file(file: &mut tempfile::NamedTempFile, content: &str) -> Result<(), String> {
+    use std::io::{Seek, Write};
+    let f = file.as_file_mut();
+    f.set_len(0).map_err(|e| e.to_string())?;
+    f.rewind().map_err(|e| e.to_string())?;
+    f.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+    f.flush().map_err(|e| e.to_string())
 }

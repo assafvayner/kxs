@@ -75,13 +75,13 @@ pub fn write(cfg: &Config) -> Result<(), String> {
     }
     let text = toml::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     // 0600 like kubeconfig itself; the file holds no secrets but context names
-    let _ = std::fs::File::create(&path)
+    std::fs::File::create(&path)
         .and_then(|mut f| {
             use std::io::Write;
             f.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
             write!(f, "{text}")
         })
-        .map_err(|e| e.to_string());
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

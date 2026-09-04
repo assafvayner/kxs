@@ -21,6 +21,7 @@ pub struct ContainersView {
     selected: usize,
     selected_container: Option<String>,
     pending: bool,
+    in_flight: bool,
     error: Option<String>,
 }
 
@@ -33,6 +34,7 @@ impl ContainersView {
             selected: 0,
             selected_container: None,
             pending: true,
+            in_flight: false,
             error: None,
         }
     }
@@ -79,7 +81,8 @@ impl View for ContainersView {
 
     fn on_msg(&mut self, msg: &crate::msg::Msg, _ctx: &AppCtx) -> Vec<Cmd> {
         match msg {
-            crate::msg::Msg::Tick if self.pending && self.error.is_none() => {
+            crate::msg::Msg::Tick if self.pending && !self.in_flight && self.error.is_none() => {
+                self.in_flight = true;
                 vec![Cmd::Fetch {
                     view: self.id,
                     what: Fetch::Containers {
@@ -90,6 +93,7 @@ impl View for ContainersView {
             }
             crate::msg::Msg::Fetched { result, .. } => {
                 self.pending = false;
+                self.in_flight = false;
                 match result {
                     Ok(crate::cmd::FetchResult::Containers(infos)) => {
                         self.containers = infos.clone()

@@ -17,7 +17,9 @@ pub struct NamespacesView {
     /// `None` = the "all" row.
     namespaces: Vec<Option<String>>,
     selected: usize,
-    handle: Option<crate::cmd::StopHandle>,
+    loaded: bool,
+    in_flight: bool,
+    error: Option<String>,
 }
 
 impl NamespacesView {
@@ -26,7 +28,9 @@ impl NamespacesView {
             id: app.alloc_id(),
             namespaces: vec![None],
             selected: 0,
-            handle: None,
+            loaded: false,
+            in_flight: false,
+            error: None,
         }
     }
 }
@@ -58,12 +62,7 @@ impl View for NamespacesView {
             KeyCode::Enter => {
                 return match self.namespaces.get(self.selected) {
                     Some(ns) => {
-                        let mut cmds = match self.handle.take() {
-                            Some(h) => vec![Cmd::Stop(h)],
-                            None => vec![],
-                        };
-                        cmds.push(Cmd::SwitchNamespace { ns: ns.clone() });
-                        cmds
+                        vec![Cmd::SwitchNamespace { ns: ns.clone() }]
                     }
                     None => vec![],
                 };
@@ -73,14 +72,10 @@ impl View for NamespacesView {
         vec![]
     }
 
-    fn on_started(&mut self, handle: crate::cmd::StopHandle, _ctx: &AppCtx) -> Vec<Cmd> {
-        self.handle = Some(handle);
-        vec![]
-    }
-
     fn on_msg(&mut self, msg: &crate::msg::Msg, _ctx: &AppCtx) -> Vec<Cmd> {
         match msg {
-            crate::msg::Msg::Tick if self.handle.is_none() => {
+            crate::msg::Msg::Tick if !self.loaded && !self.in_flight => {
+                self.in_flight = true;
                 vec![Cmd::Fetch {
                     view: self.id,
                     what: Fetch::Namespaces,
@@ -90,10 +85,17 @@ impl View for NamespacesView {
                 result: Ok(crate::cmd::FetchResult::Namespaces(list)),
                 ..
             } => {
-                self.handle = None;
+                self.loaded = true;
+                self.in_flight = false;
                 let mut ns: Vec<Option<String>> = vec![None];
                 ns.extend(list.iter().cloned().map(Some));
                 self.namespaces = ns;
+                vec![]
+            }
+            crate::msg::Msg::Fetched { result: Err(e), .. } => {
+                self.loaded = true;
+                self.in_flight = false;
+                self.error = Some(e.clone());
                 vec![]
             }
             _ => vec![],
@@ -102,13 +104,6 @@ impl View for NamespacesView {
 
     fn wants_filter(&self) -> bool {
         false
-    }
-
-    fn on_pop(&mut self) -> Vec<Cmd> {
-        match self.handle.take() {
-            Some(h) => vec![Cmd::Stop(h)],
-            None => vec![],
-        }
     }
 
     fn render(&self, f: &mut Frame, area: Rect, th: &Theme, _filter: &str) {
@@ -133,7 +128,8 @@ impl View for NamespacesView {
             );
         f.render_widget(table, area);
         if self.namespaces.len() <= 1 {
-            let loading = Paragraph::new("loading…").style(Style::new().fg(th.colors.fg_dim));
+            let loading = Paragraph::new(self.error.as_deref().unwrap_or("loading…"))
+                .style(Style::new().fg(th.colors.fg_dim));
             f.render_widget(loading, area);
         }
     }

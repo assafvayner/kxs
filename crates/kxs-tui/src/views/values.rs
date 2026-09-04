@@ -24,6 +24,7 @@ pub struct ValuesView {
     masked: bool,
     handle: Option<StopHandle>,
     pending: bool,
+    in_flight: bool,
     error: Option<String>,
 }
 
@@ -37,6 +38,7 @@ impl ValuesView {
             masked: target.kind.kind == "Secret",
             handle: None,
             pending: true,
+            in_flight: false,
             error: None,
         }
     }
@@ -105,7 +107,8 @@ impl View for ValuesView {
 
     fn on_msg(&mut self, msg: &crate::msg::Msg, _ctx: &AppCtx) -> Vec<Cmd> {
         match msg {
-            crate::msg::Msg::Tick if self.pending && self.error.is_none() => {
+            crate::msg::Msg::Tick if self.pending && !self.in_flight && self.error.is_none() => {
+                self.in_flight = true;
                 vec![Cmd::Fetch {
                     view: self.id,
                     what: crate::cmd::Fetch::ConfigValues {
@@ -117,6 +120,7 @@ impl View for ValuesView {
             }
             crate::msg::Msg::Fetched { view, result } if *view == self.id => {
                 self.pending = false;
+                self.in_flight = false;
                 match result {
                     Ok(crate::cmd::FetchResult::Values(entries)) => self.entries = entries.clone(),
                     Err(e) => self.error = Some(e.clone()),

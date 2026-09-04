@@ -21,6 +21,7 @@ pub struct RolloutView {
     selected: usize,
     handle: Option<StopHandle>,
     pending: bool,
+    in_flight: bool,
     error: Option<String>,
 }
 
@@ -33,6 +34,7 @@ impl RolloutView {
             selected: 0,
             handle: None,
             pending: true,
+            in_flight: false,
             error: None,
         }
     }
@@ -85,7 +87,8 @@ impl View for RolloutView {
 
     fn on_msg(&mut self, msg: &crate::msg::Msg, _ctx: &AppCtx) -> Vec<Cmd> {
         match msg {
-            crate::msg::Msg::Tick if self.pending => {
+            crate::msg::Msg::Tick if self.pending && !self.in_flight => {
+                self.in_flight = true;
                 vec![Cmd::Fetch {
                     view: self.id,
                     what: Fetch::RolloutHistory {
@@ -99,11 +102,13 @@ impl View for RolloutView {
                 ..
             } => {
                 self.pending = false;
+                self.in_flight = false;
                 self.revisions = revs.clone();
                 vec![]
             }
             crate::msg::Msg::Fetched { result: Err(e), .. } => {
                 self.pending = false;
+                self.in_flight = false;
                 self.revisions = vec![];
                 self.error = Some(e.clone());
                 vec![]
