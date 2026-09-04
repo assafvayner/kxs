@@ -1289,3 +1289,79 @@ fn pods_selection_after_snapshot_respects_filter() {
     );
     assert_eq!(view.target().expect("target").name, "web-1");
 }
+
+#[test]
+fn pods_cpu_sort_keeps_the_filter() {
+    use kxs_cluster::metrics::MetricsRow;
+    use kxs_cluster::pods::{PodEvent, PodRow};
+    use kxs_tui::views::pods::PodsView;
+    let mut app = test_app();
+    let mut view = PodsView::new(&mut app, Some("default".into()));
+    let ctx = app.ctx();
+    let id = view.id();
+    let row = |name: &str| PodRow {
+        key: format!("default/{name}"),
+        name: name.into(),
+        namespace: "default".into(),
+        ready: "1/1".into(),
+        status: "Running".into(),
+        restarts: 0,
+        ip: None,
+        node: None,
+        created: Some("2026-09-01T00:00:00Z".into()),
+        cpu_request_millis: None,
+        mem_request_mib: None,
+    };
+    view.set_filter("web");
+    view.on_msg(
+        &Msg::Pod {
+            view: id,
+            ev: PodEvent::Snapshot {
+                rows: vec![row("agent-1"), row("web-1"), row("web-2")],
+            },
+        },
+        &ctx,
+    );
+    view.on_msg(
+        &Msg::Metrics {
+            view: id,
+            // agent-1 is filtered out but has the lowest CPU of the three, so an
+            // unfiltered sort (the bug) would surface it as the ascending "first" row.
+            pods: Ok(vec![
+                MetricsRow {
+                    key: "default/agent-1".into(),
+                    name: "agent-1".into(),
+                    namespace: Some("default".into()),
+                    cpu_millicores: 1,
+                    mem_mib: 100,
+                },
+                MetricsRow {
+                    key: "default/web-1".into(),
+                    name: "web-1".into(),
+                    namespace: Some("default".into()),
+                    cpu_millicores: 10,
+                    mem_mib: 100,
+                },
+                MetricsRow {
+                    key: "default/web-2".into(),
+                    name: "web-2".into(),
+                    namespace: Some("default".into()),
+                    cpu_millicores: 50,
+                    mem_mib: 100,
+                },
+            ]),
+            nodes: Ok(vec![]),
+        },
+        &ctx,
+    );
+    // shift-C sorts by CPU ascending, then jump to the first row of that order.
+    view.handle_key(KeyEvent::from(KeyCode::Char('C')), &ctx);
+    view.handle_key(KeyEvent::from(KeyCode::Home), &ctx);
+    let target = view.target().expect("target");
+    assert!(target.name.starts_with("web-"), "{}", target.name);
+    // shift-C again sorts descending; the first row should still be a filtered pod.
+    view.handle_key(KeyEvent::from(KeyCode::Char('C')), &ctx);
+    view.handle_key(KeyEvent::from(KeyCode::Home), &ctx);
+    let target = view.target().expect("target");
+    assert!(target.name.starts_with("web-"), "{}", target.name);
+}
