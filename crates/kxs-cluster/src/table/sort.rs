@@ -42,32 +42,43 @@ fn cmp_case_insensitive(a: &str, b: &str) -> Ordering {
     al.cmp(&bl)
 }
 
+/// Category rank so mixed columns still form a total order: quantities, then
+/// leading-number cells, then plain strings, then empties.
+fn rank(v: &str) -> u8 {
+    if is_empty_cell(v) {
+        3
+    } else if quantity(v).is_some() {
+        0
+    } else if leading(v).is_some() {
+        1
+    } else {
+        2
+    }
+}
+
 /// Numeric-aware cell order: quantities and leading numbers compare numerically
 /// ("2" < "10", "250m" < "1", "128Mi" < "1Gi"), empty cells sort last, anything
 /// else compares case-insensitively.
 pub fn compare_cells(a: &str, b: &str) -> Ordering {
-    let ea = is_empty_cell(a);
-    let eb = is_empty_cell(b);
-    if ea || eb {
-        return match (ea, eb) {
-            (true, true) => Ordering::Equal,
-            (true, false) => Ordering::Greater,
-            (false, true) => Ordering::Less,
-            _ => unreachable!(),
-        };
+    let (ra, rb) = (rank(a), rank(b));
+    if ra != rb {
+        return ra.cmp(&rb);
     }
-    if let (Some(qa), Some(qb)) = (quantity(a), quantity(b)) {
-        return qa.partial_cmp(&qb).unwrap_or(Ordering::Equal);
-    }
-    if let (Some((la, ra)), Some((lb, rb))) = (leading(a), leading(b)) {
-        if let Some(ord) = la.partial_cmp(&lb) {
-            if ord != Ordering::Equal {
-                return ord;
+    match ra {
+        3 => Ordering::Equal,
+        0 => quantity(a)
+            .partial_cmp(&quantity(b))
+            .unwrap_or(Ordering::Equal),
+        1 => {
+            let (la, rest_a) = leading(a).expect("rank 1");
+            let (lb, rest_b) = leading(b).expect("rank 1");
+            match la.partial_cmp(&lb) {
+                Some(Ordering::Equal) | None => cmp_case_insensitive(rest_a, rest_b),
+                Some(ord) => ord,
             }
         }
-        return cmp_case_insensitive(ra, rb);
+        _ => cmp_case_insensitive(a.trim(), b.trim()),
     }
-    cmp_case_insensitive(a.trim(), b.trim())
 }
 
 /// Sort key for an Age column: ascending *age* means youngest first, so the key
@@ -216,6 +227,19 @@ mod tests {
         assert_eq!(
             sorted(vec!["10.0.0.1", "9.0.0.1"]),
             vec!["9.0.0.1", "10.0.0.1"]
+        );
+    }
+
+    #[test]
+    fn compare_cells_is_transitive_across_categories() {
+        // previously a 3-cycle: 512Mi < 1Gi, 2/2 < 512Mi, 1Gi < 2/2
+        assert_eq!(
+            sorted(vec!["2/2", "1Gi", "512Mi"]),
+            vec!["512Mi", "1Gi", "2/2"]
+        );
+        assert_eq!(
+            sorted(vec!["web", "2/2", "3", ""]),
+            vec!["3", "2/2", "web", ""]
         );
     }
 

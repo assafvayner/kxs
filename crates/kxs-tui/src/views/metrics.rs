@@ -177,7 +177,7 @@ impl View for MetricsView {
                     ],
                 )
                 .header(
-                    Row::new(["NAME", "CPU", "CPU%", "MEM", "MEM%"])
+                    Row::new(["NAME", "CPU%", "CPU", "MEM%", "MEM"])
                         .style(Style::new().fg(th.colors.fg_dim).bold()),
                 )
                 .block(nodes_block);
