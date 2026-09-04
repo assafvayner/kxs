@@ -40,6 +40,24 @@ pub async fn workload_pods(
     Ok(names)
 }
 
+/// Labels a CronJob puts on its pods: the Job's pod template labels, falling
+/// back to the Job template's own metadata labels.
+pub fn cronjob_pod_labels(cj: &CronJob) -> Option<std::collections::BTreeMap<String, String>> {
+    let jt = &cj.spec.as_ref()?.job_template;
+    let from_pod = jt
+        .spec
+        .as_ref()
+        .and_then(|s| s.template.metadata.as_ref())
+        .and_then(|m| m.labels.clone())
+        .filter(|l| !l.is_empty());
+    from_pod.or_else(|| {
+        jt.metadata
+            .as_ref()
+            .and_then(|m| m.labels.clone())
+            .filter(|l| !l.is_empty())
+    })
+}
+
 /// The label selector string of a workload ("k1=v1,k2=v2"), for driving a pod
 /// watch from a pod-owner row. For a CronJob the Job template's metadata labels
 /// are used (Job pods inherit them). Errors when there is no usable selector.
@@ -59,15 +77,8 @@ pub async fn workload_selector(
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("CronJob \"{name}\" not found"))?;
-        let labels = cj
-            .spec
-            .as_ref()
-            .and_then(|s| s.job_template.metadata.as_ref())
-            .and_then(|m| m.labels.clone())
-            .ok_or_else(|| format!("CronJob \"{name}\" job template has no labels"))?;
-        if labels.is_empty() {
-            return Err(format!("CronJob \"{name}\" job template has no labels"));
-        }
+        let labels = cronjob_pod_labels(&cj)
+            .ok_or_else(|| format!("CronJob \"{name}\" has no pod labels"))?;
         let mut parts: Vec<String> = labels
             .into_iter()
             .map(|(k, v)| format!("{k}={v}"))
@@ -545,6 +556,35 @@ mod tests {
         assert_eq!(
             selector_from_spec(&json!({"spec": {"selector": {"matchLabels": {}}}})),
             None
+        );
+    }
+
+    #[test]
+    fn cronjob_pod_labels_prefers_pod_template() {
+        let cj: CronJob = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "tick"},
+            "spec": {"schedule": "* * * * *", "jobTemplate": {
+                "metadata": {"labels": {"job": "x"}},
+                "spec": {"template": {"metadata": {"labels": {"app": "tick"}}, "spec": {"containers": []}}}
+            }}
+        }))
+        .unwrap();
+        let labels = cronjob_pod_labels(&cj).unwrap();
+        assert_eq!(labels.get("app").map(String::as_str), Some("tick"));
+        let cj2: CronJob = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "tick"},
+            "spec": {"schedule": "* * * * *", "jobTemplate": {
+                "metadata": {"labels": {"job": "x"}},
+                "spec": {"template": {"spec": {"containers": []}}}
+            }}
+        }))
+        .unwrap();
+        assert_eq!(
+            cronjob_pod_labels(&cj2)
+                .unwrap()
+                .get("job")
+                .map(String::as_str),
+            Some("x")
         );
     }
 
