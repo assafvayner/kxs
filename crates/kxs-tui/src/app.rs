@@ -850,8 +850,7 @@ impl App {
     fn esc_cascade(&mut self) -> Vec<Cmd> {
         if let Some(v) = self.top_view() {
             if !v.filter().is_empty() {
-                v.set_filter("");
-                return vec![];
+                return v.set_filter("");
             }
         }
         self.pop_view()
@@ -892,12 +891,10 @@ impl App {
                         self.remember_command(text.trim());
                         self.handle_command(&text)
                     }
-                    Some(PromptKind::Filter) => {
-                        if let Some(v) = self.top_view() {
-                            v.set_filter(&text);
-                        }
-                        vec![]
-                    }
+                    Some(PromptKind::Filter) => match self.top_view() {
+                        Some(v) => v.set_filter(&text),
+                        None => vec![],
+                    },
                     None => vec![],
                 }
             }
@@ -1674,6 +1671,33 @@ mod tests {
         // unknown command flashes, does not panic
         app.handle_command("bogus");
         assert!(app.chrome.flash.is_some());
+    }
+
+    #[test]
+    fn filter_prompt_returns_view_commands() {
+        let mut app = test_app();
+        let view = Box::new(crate::views::pods::PodsView::new(
+            &mut app,
+            Some("default".into()),
+        ));
+        app.push_view(view);
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Char('/'))));
+        for c in "-l app=web".chars() {
+            app.update(Msg::Key(KeyEvent::from(KeyCode::Char(c))));
+        }
+        let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+        assert!(
+            cmds.iter().any(
+                |c| matches!(c, Cmd::StartPodWatch { selector: Some(s), .. } if s == "app=web")
+            ),
+            "selector change must restart the watch"
+        );
+        let cmds = app.update(Msg::Key(KeyEvent::from(KeyCode::Esc)));
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Cmd::StartPodWatch { selector: None, .. })),
+            "clearing the selector must restart the watch"
+        );
     }
 
     #[test]
