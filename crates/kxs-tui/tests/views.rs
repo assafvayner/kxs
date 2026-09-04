@@ -129,12 +129,21 @@ fn resources_view_renders_age_from_created() {
     let mut view = resources_view(&mut app);
     let ctx = app.ctx();
     let id = view.id();
+    let created = "2026-08-01T00:00:00Z";
+    let table = ResourceTable {
+        columns: vec!["NAME".into(), "READY".into(), "STATUS".into(), "Age".into()],
+        rows: vec![ResourceRow {
+            key: "default/web-7d9f".into(),
+            name: "web-7d9f".into(),
+            namespace: Some("default".into()),
+            cells: vec!["web-7d9f".into(), "1/1".into(), "Running".into(), "".into()],
+            created: Some(created.into()),
+        }],
+    };
     view.on_msg(
         &Msg::Table {
             view: id,
-            ev: TableEvent::Table {
-                table: fixture_table(),
-            },
+            ev: TableEvent::Table { table },
         },
         &ctx,
     );
@@ -143,12 +152,11 @@ fn resources_view_renders_age_from_created() {
         .unwrap();
     let text = buf_text(&t);
     let web_line = text.lines().find(|l| l.contains("web-7d9f")).expect("row");
-    let last = web_line.trim_end().trim_end_matches('│').trim_end();
+    let expected = kxs_core::format::age(Some(created), kxs_cluster::clock::now_ms());
     assert!(
-        last.ends_with('d'),
-        "age cell should end in days: {web_line}"
+        web_line.contains(&expected),
+        "expected age {expected:?} in row: {web_line}"
     );
-    assert!(!last.ends_with("Running"), "age cell is empty: {web_line}");
 }
 
 #[test]
