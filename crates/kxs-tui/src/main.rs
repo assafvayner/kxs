@@ -104,13 +104,9 @@ async fn main() -> Result<(), String> {
 
     // initial views and their pending commands (watch starts, context pings)
     let mut pre_cmds: Vec<Cmd> = if connected_at_startup {
-        let mut cmds = match views::resources::open(&mut app, "pods", None) {
-            Some(view) => app.replace_views(vec![view]),
-            None => {
-                let view = Box::new(views::contexts::ContextsView::new(&mut app));
-                app.push_view(view)
-            }
-        };
+        let landing = app.landing_view();
+        let mut cmds = app.replace_views(vec![landing]);
+        cmds.push(app.poll_metrics_cmd());
         if let Some(cmd) = &cli.command {
             cmds.extend(app.exec_command(cmd));
         }

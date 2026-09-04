@@ -24,6 +24,9 @@ pub struct MetricsView {
     interval: std::time::Duration,
     nodes_scroll: crate::table::Scroll,
     pods_scroll: crate::table::Scroll,
+    /// Set once the first tick has asked for a poll, so a freshly pushed view
+    /// fills in immediately without restarting the poller on every tick.
+    polled: bool,
 }
 
 impl MetricsView {
@@ -38,9 +41,10 @@ impl MetricsView {
             pods: Ok(vec![]),
             nodes: Ok(vec![]),
             selected: 0,
-            interval: std::time::Duration::from_secs(secs),
+            interval: std::time::Duration::from_secs(secs.max(1)),
             nodes_scroll: Default::default(),
             pods_scroll: Default::default(),
+            polled: false,
         }
     }
 
@@ -96,11 +100,21 @@ impl View for MetricsView {
     }
 
     fn on_msg(&mut self, msg: &crate::msg::Msg, _ctx: &AppCtx) -> Vec<Cmd> {
-        if let crate::msg::Msg::Metrics { pods, nodes, .. } = msg {
-            self.pods = pods.clone();
-            self.nodes = nodes.clone();
+        match msg {
+            crate::msg::Msg::Metrics { pods, nodes, .. } => {
+                self.pods = pods.clone();
+                self.nodes = nodes.clone();
+                vec![]
+            }
+            crate::msg::Msg::Tick if !self.polled => {
+                self.polled = true;
+                vec![Cmd::PollMetrics {
+                    view: self.id,
+                    every: self.interval,
+                }]
+            }
+            _ => vec![],
         }
-        vec![]
     }
 
     fn render(&self, f: &mut Frame, area: Rect, th: &Theme, _filter: &str) {

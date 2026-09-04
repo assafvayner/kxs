@@ -154,6 +154,55 @@ impl App {
         }
     }
 
+    /// The view a connect lands on: the context's remembered kind when it still
+    /// exists in this cluster, else Pods.
+    pub fn landing_view(&mut self) -> Box<dyn View> {
+        let ns = self.ctx().namespace;
+        // `chrome.context` is still empty before the first `sync_chrome`, so the
+        // active session is the authority at startup.
+        let context = {
+            let s = self.sessions.lock().expect("sessions lock");
+            s.active
+                .as_ref()
+                .map(|a| a.name.clone())
+                .unwrap_or_default()
+        };
+        let last_kind = {
+            let cfg = self.config.lock().expect("config lock");
+            cfg.contexts.get(&context).and_then(|c| c.last_kind.clone())
+        };
+        if let Some(plural) = last_kind.filter(|p| p != "pods") {
+            if let Some(view) = crate::views::resources::open(self, &plural, None) {
+                return view;
+            }
+        }
+        Box::new(crate::views::pods::PodsView::new(self, ns))
+    }
+
+    /// One shared metrics poller; results are broadcast to every view.
+    pub fn poll_metrics_cmd(&self) -> Cmd {
+        let secs = self
+            .config
+            .lock()
+            .map(|c| c.metrics_interval_secs)
+            .unwrap_or(15)
+            .max(1);
+        Cmd::PollMetrics {
+            view: 0,
+            every: std::time::Duration::from_secs(secs),
+        }
+    }
+
+    fn remember_last_kind(&mut self, plural: &str) {
+        let context = self.chrome.context.clone();
+        if context.is_empty() {
+            return;
+        }
+        if let Ok(mut cfg) = self.config.lock() {
+            cfg.contexts.entry(context).or_default().last_kind = Some(plural.to_string());
+        }
+    }
+
     pub fn ctx(&self) -> AppCtx {
         let s = self.sessions.lock().expect("sessions lock");
         let readonly = self.readonly();
@@ -338,10 +387,13 @@ impl App {
             }
             Msg::Metrics { view, pods, nodes } => {
                 self.on_metrics(&pods, &nodes);
-                if !self.on_stack(view) {
-                    return vec![];
+                let ctx = self.ctx();
+                let msg = Msg::Metrics { view, pods, nodes };
+                let mut cmds = vec![];
+                for v in &mut self.views {
+                    cmds.extend(v.on_msg(&msg, &ctx));
                 }
-                self.route(view, &Msg::Metrics { view, pods, nodes })
+                cmds
             }
             Msg::Mutated { view, m, result } => {
                 if !self.on_stack(view) {
@@ -506,22 +558,11 @@ impl App {
                 self.sync_chrome();
                 self.metrics_error_flashed = false;
                 self.chrome.flash(format!("connected: {context}"), false);
-                let view = Box::new(crate::views::pods::PodsView::new(
-                    self,
-                    self.ctx().namespace,
-                ));
-                let mut cmds = self.replace_views(vec![view]);
-                if let Some(id) = self.views.last().map(|v| v.id()) {
-                    let secs = self
-                        .config
-                        .lock()
-                        .map(|c| c.metrics_interval_secs)
-                        .unwrap_or(15);
-                    cmds.push(Cmd::PollMetrics {
-                        view: id,
-                        every: std::time::Duration::from_secs(secs.max(1)),
-                    });
-                }
+                let landing = self.landing_view();
+                let mut cmds = self.replace_views(vec![landing]);
+                let ns_view = Box::new(crate::views::namespaces::NamespacesView::new(self));
+                cmds.extend(self.push_view(ns_view));
+                cmds.push(self.poll_metrics_cmd());
                 cmds
             }
             Err(text) => {
@@ -1024,7 +1065,11 @@ impl App {
                 }
             },
         };
+        if let Some(kind) = kxs_cluster::command::resolve_kind(&kinds, head) {
+            self.remember_last_kind(&kind.plural);
+        }
         let mut cmds = self.replace_views(vec![view]);
+        cmds.push(Cmd::SaveConfig);
         if let Some(filter) = filter {
             if let Some(v) = self.views.last_mut() {
                 cmds.extend(v.set_filter(&filter));
@@ -1612,6 +1657,38 @@ mod tests {
             Arc::new(Mutex::new(Config::default())),
             crate::theme::get(crate::theme::DEFAULT_ID),
         )
+    }
+
+    #[test]
+    fn metrics_are_broadcast_to_every_view() {
+        let mut app = test_app();
+        let view = Box::new(crate::views::metrics::MetricsView::new(&mut app));
+        app.push_view(view);
+        app.update(Msg::Metrics {
+            view: 0,
+            pods: Ok(vec![]),
+            nodes: Ok(vec![kxs_cluster::metrics::NodeMetricsRow {
+                name: "n1".into(),
+                cpu_millicores: 500,
+                cpu_allocatable_millicores: Some(1000),
+                mem_mib: 1024,
+                mem_allocatable_mib: Some(2048),
+            }]),
+        });
+        assert_eq!(app.views.last().unwrap().title(), "Metrics[nodes=1 pods=0]");
+        assert_eq!(app.chrome.cpu_mem.as_deref(), Some("50% / 50%"));
+    }
+
+    #[test]
+    fn connected_lands_on_namespaces_over_pods() {
+        let mut app = test_app();
+        let cmds = app.update(Msg::Connected {
+            context: "kind-local".into(),
+            result: Ok("v1.30".into()),
+        });
+        let crumbs: Vec<String> = app.views.iter().map(|v| v.crumb()).collect();
+        assert_eq!(crumbs, vec!["pods", "ns"]);
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::PollMetrics { .. })));
     }
 
     #[test]
