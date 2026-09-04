@@ -52,10 +52,11 @@ pub struct ResourcesView {
 
 impl ResourcesView {
     pub fn new(app: &mut crate::app::App, kind: ResourceKind, ns: Option<String>) -> Self {
+        let namespaced = kind.namespaced;
         ResourcesView {
             id: app.alloc_id(),
             kind,
-            watched_ns: ns,
+            watched_ns: if namespaced { ns } else { None },
             filter: String::new(),
             labels: None,
             name_filter: String::new(),
@@ -258,11 +259,12 @@ impl View for ResourcesView {
 
     fn title(&self) -> String {
         let count = self.visible_rows().len();
-        let ns = match &self.watched_ns {
-            Some(n) => n.as_str(),
-            None => "all",
+        let mut title = if self.kind.namespaced {
+            let ns = self.watched_ns.as_deref().unwrap_or("all");
+            format!("{}({})[{}]", self.kind.kind, ns, count)
+        } else {
+            format!("{}[{}]", self.kind.kind, count)
         };
-        let mut title = format!("{}({})[{}]", self.kind.kind, ns, count);
         if let Some(status) = &self.status {
             title.push_str(&format!("  {status}"));
         }
@@ -505,7 +507,8 @@ impl View for ResourcesView {
                     return vec![self.restart_watch()];
                 }
                 // follow namespace switches made outside this view
-                if self.handle.is_some() && ctx.namespace != self.watched_ns {
+                if self.kind.namespaced && self.handle.is_some() && ctx.namespace != self.watched_ns
+                {
                     self.watched_ns = ctx.namespace.clone();
                     let mut cmds = self.stop_old();
                     cmds.push(self.restart_watch());

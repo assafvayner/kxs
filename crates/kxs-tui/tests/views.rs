@@ -8,6 +8,7 @@ use kxs_cluster::discovery::ResourceKind;
 use kxs_cluster::resources::{ResourceRow, ResourceTable, TableEvent};
 
 use kxs_tui::app::App;
+use kxs_tui::cmd::Cmd;
 use kxs_tui::config::Config;
 use kxs_tui::msg::Msg;
 use kxs_tui::sessions::{Sessions, Shared};
@@ -658,7 +659,6 @@ fn delete_modal_tracks_propagation_and_force() {
 
 #[test]
 fn rollout_view_lists_revisions_and_confirms_undo() {
-    use kxs_tui::cmd::Cmd;
     let mut app = test_app();
     let target = pod_target();
     let view = kxs_tui::views::rollout::RolloutView::new(&mut app, target);
@@ -1364,4 +1364,27 @@ fn pods_cpu_sort_keeps_the_filter() {
     view.handle_key(KeyEvent::from(KeyCode::Home), &ctx);
     let target = view.target().expect("target");
     assert!(target.name.starts_with("web-"), "{}", target.name);
+}
+
+#[test]
+fn cluster_scoped_view_ignores_namespace() {
+    let mut app = test_app();
+    let node_kind = ResourceKind {
+        group: "".into(),
+        version: "v1".into(),
+        kind: "Node".into(),
+        plural: "nodes".into(),
+        namespaced: false,
+        aliases: vec!["no".into()],
+    };
+    let view = ResourcesView::new(&mut app, node_kind, Some("kxs-review".into()));
+    assert_eq!(view.title(), "Node[0]");
+    let ctx = app.ctx();
+    let mut view = view;
+    let cmds = view.on_msg(&Msg::Tick, &ctx);
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::StartTableWatch { ns: None, .. })),
+        "cluster-scoped watch must not be namespaced"
+    );
 }
