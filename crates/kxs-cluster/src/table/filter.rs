@@ -20,10 +20,10 @@ pub fn split_filter(filter: &str) -> (Option<String>, String) {
     }
     match rest.find(char::is_whitespace) {
         None => (Some(rest.to_string()), String::new()),
-        Some(i) => (
-            Some(rest[..i].to_string()),
-            rest[i + 1..].trim().to_string(),
-        ),
+        Some(i) => {
+            let (sel, tail) = rest.split_at(i);
+            (Some(sel.to_string()), tail.trim().to_string())
+        }
     }
 }
 
@@ -109,6 +109,13 @@ mod tests {
             split_filter("-l app=demo-web -r ^web"),
             (Some("app=demo-web".into()), "-r ^web".into())
         );
+    }
+
+    #[test]
+    fn split_filter_survives_unicode_whitespace() {
+        let (labels, name) = split_filter("-l app=web\u{a0}foo");
+        assert_eq!(labels.as_deref(), Some("app=web"));
+        assert_eq!(name, "foo");
     }
 
     #[test]

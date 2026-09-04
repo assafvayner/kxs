@@ -102,43 +102,47 @@ impl Pager {
 
     /// Line with search hits highlighted; falls back to the colorizer.
     fn highlight(&self, line: &str, th: &Theme) -> Vec<Span<'static>> {
-        let plain = |s: &str| Span::styled(s.to_string(), Style::new().fg(th.colors.fg));
         let Some(q) = self.search.as_ref().filter(|q| !q.is_empty()) else {
             return match self.colorize {
                 Some(f) => f(line, th),
-                None => vec![plain(line)],
+                None => vec![Span::styled(
+                    line.to_string(),
+                    Style::new().fg(th.colors.fg),
+                )],
             };
         };
-        let mut spans = vec![];
-        let mut rest = line;
-        let ql = q.to_lowercase();
-        loop {
-            match rest.to_lowercase().find(&ql) {
-                Some(i) => {
-                    let (before, after) = rest.split_at(i);
-                    if !before.is_empty() {
-                        spans.push(plain(before));
-                    }
-                    let (hit, tail) = after.split_at(q.chars().count());
-                    spans.push(Span::styled(
-                        hit.to_string(),
-                        Style::new().fg(th.colors.bg).bg(th.colors.yellow),
-                    ));
-                    rest = tail;
-                    if rest.is_empty() {
-                        break;
-                    }
+        highlight_spans(line, q, th)
+    }
+}
+
+/// Case-insensitive highlight of `q` inside `line`, char-boundary safe.
+pub(crate) fn highlight_spans(line: &str, q: &str, th: &Theme) -> Vec<Span<'static>> {
+    let plain = |s: &str| Span::styled(s.to_string(), Style::new().fg(th.colors.fg));
+    let hit_style = Style::new().fg(th.colors.bg).bg(th.colors.yellow);
+    let ql = q.to_lowercase();
+    let qchars = q.chars().count();
+    let mut spans = vec![];
+    let mut rest = line;
+    while !rest.is_empty() {
+        let found = rest
+            .char_indices()
+            .find(|(i, _)| rest[*i..].to_lowercase().starts_with(&ql));
+        match found {
+            Some((i, _)) => {
+                if i > 0 {
+                    spans.push(plain(&rest[..i]));
                 }
-                None => {
-                    if !rest.is_empty() {
-                        spans.push(plain(rest));
-                    }
-                    break;
-                }
+                let hit_len: usize = rest[i..].chars().take(qchars).map(char::len_utf8).sum();
+                spans.push(Span::styled(rest[i..i + hit_len].to_string(), hit_style));
+                rest = &rest[i + hit_len..];
+            }
+            None => {
+                spans.push(plain(rest));
+                break;
             }
         }
-        spans
     }
+    spans
 }
 
 impl View for Pager {
@@ -237,5 +241,21 @@ impl View for Pager {
                 .block(block),
             area,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn highlight_handles_multibyte_text() {
+        let spans = highlight_spans(
+            "über Über ub",
+            "ü",
+            &crate::theme::get(crate::theme::DEFAULT_ID),
+        );
+        let hits: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(hits, vec!["ü", "ber ", "Ü", "ber ub"]);
     }
 }
