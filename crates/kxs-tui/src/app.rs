@@ -465,14 +465,11 @@ impl App {
             }
             Msg::Connected { context, result } => self.on_connected(&context, result),
             Msg::Error { view, text } => {
-                if let Some(id) = view {
-                    if !self.on_stack(id) {
-                        return vec![];
-                    }
-                    return self.route(id, &Msg::Error { view, text });
+                self.chrome.flash(text.clone(), true);
+                match view {
+                    Some(id) if self.on_stack(id) => self.route(id, &Msg::Error { view, text }),
+                    _ => vec![],
                 }
-                self.chrome.flash(text, true);
-                vec![]
             }
             Msg::KubeconfigChanged => {
                 let mut s = self.sessions.lock().expect("sessions lock");
@@ -1812,6 +1809,22 @@ mod tests {
             cmds.iter()
                 .any(|c| matches!(c, Cmd::StartPodWatch { selector: None, .. })),
             "clearing the selector must restart the watch"
+        );
+    }
+
+    #[test]
+    fn view_scoped_errors_flash() {
+        let mut app = test_app();
+        let view = Box::new(crate::views::pods::PodsView::new(&mut app, None));
+        app.push_view(view);
+        let id = app.views[0].id();
+        app.update(Msg::Error {
+            view: Some(id),
+            text: "port-forward: refused".into(),
+        });
+        assert_eq!(
+            app.chrome.flash.as_ref().map(|f| f.text.as_str()),
+            Some("port-forward: refused")
         );
     }
 
