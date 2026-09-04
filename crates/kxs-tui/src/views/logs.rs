@@ -1,6 +1,7 @@
 //! Logs view: one stream per target pod, ring buffer, window presets,
 //! container picker via the Chrome modal when a pod has several.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -45,6 +46,9 @@ pub struct LogsView {
     /// Pod name per line (multi-pod mode), parallel to `lines`.
     prefixes: VecDeque<Option<String>>,
     autoscroll: bool,
+    /// Lines scrolled back from the tail; `0` means pinned to the end.
+    scroll_from_end: usize,
+    viewport: Cell<usize>,
     fullscreen: bool,
     wrap: bool,
     timestamps: bool,
@@ -53,6 +57,8 @@ pub struct LogsView {
     filter: String,
     handles: Vec<StopHandle>,
     status: Option<String>,
+    /// A fetch failed; stop retrying until the streams are restarted.
+    fetch_failed: bool,
 }
 
 impl LogsView {
@@ -75,6 +81,8 @@ impl LogsView {
             lines: VecDeque::new(),
             prefixes: VecDeque::new(),
             autoscroll: true,
+            scroll_from_end: 0,
+            viewport: Cell::new(20),
             fullscreen: false,
             wrap: true,
             timestamps: false,
@@ -83,6 +91,7 @@ impl LogsView {
             filter: String::new(),
             handles: vec![],
             status: None,
+            fetch_failed: false,
         }
     }
 
@@ -143,8 +152,21 @@ impl LogsView {
 
     fn restart(&mut self) -> Vec<Cmd> {
         let mut cmds = self.stop_streams();
+        self.lines.clear();
+        self.prefixes.clear();
+        self.scroll_from_end = 0;
+        self.fetch_failed = false;
         cmds.extend(self.start_streams());
         cmds
+    }
+
+    fn scroll_by(&mut self, delta: isize) {
+        let inner = self.viewport.get().max(1);
+        let total = self.lines.iter().filter(|l| self.line_matches(l)).count();
+        let max_back = total.saturating_sub(inner);
+        let next = (self.scroll_from_end as isize + delta).clamp(0, max_back as isize) as usize;
+        self.scroll_from_end = next;
+        self.autoscroll = next == 0 && delta <= 0 && self.autoscroll;
     }
 
     fn push_lines(&mut self, pod: &str, lines: &[String]) {
@@ -242,7 +264,37 @@ impl View for LogsView {
 
     fn handle_key(&mut self, key: KeyEvent, _ctx: &AppCtx) -> Vec<Cmd> {
         match key.code {
-            KeyCode::Char('s') => self.autoscroll = !self.autoscroll,
+            KeyCode::Char('s') => {
+                self.autoscroll = !self.autoscroll;
+                if self.autoscroll {
+                    self.scroll_from_end = 0;
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll_by(1);
+                self.autoscroll = false;
+            }
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_by(-1),
+            KeyCode::PageUp => {
+                self.scroll_by(self.viewport.get() as isize);
+                self.autoscroll = false;
+            }
+            KeyCode::PageDown => self.scroll_by(-(self.viewport.get() as isize)),
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_by(self.viewport.get() as isize);
+                self.autoscroll = false;
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_by(-(self.viewport.get() as isize))
+            }
+            KeyCode::Char('g') => {
+                self.scroll_by(isize::MAX / 2);
+                self.autoscroll = false;
+            }
+            KeyCode::Char('G') => {
+                self.scroll_from_end = 0;
+                self.autoscroll = true;
+            }
             KeyCode::Char('w') => self.wrap = !self.wrap,
             KeyCode::Char('t') => {
                 self.timestamps = !self.timestamps;
@@ -277,6 +329,9 @@ impl View for LogsView {
     fn on_msg(&mut self, msg: &crate::msg::Msg, _ctx: &AppCtx) -> Vec<Cmd> {
         match msg {
             crate::msg::Msg::Tick => {
+                if self.fetch_failed {
+                    return vec![];
+                }
                 if !self.handles.is_empty() || self.pending_pick {
                     return vec![];
                 }
@@ -369,6 +424,7 @@ impl View for LogsView {
                 }
                 Err(e) => {
                     self.pending_pick = false;
+                    self.fetch_failed = true;
                     self.status = Some(e.clone());
                     vec![]
                 }
@@ -427,6 +483,7 @@ impl View for LogsView {
                 Style::new().fg(th.colors.accent),
             )));
         let inner_h = area.height.saturating_sub(2) as usize;
+        self.viewport.set(inner_h);
         let all: Vec<(&Option<String>, &String)> = self
             .prefixes
             .iter()
@@ -447,12 +504,9 @@ impl View for LogsView {
             return;
         }
         let total = all.len();
-        let start = if self.autoscroll {
-            total.saturating_sub(inner_h)
-        } else {
-            0
-        };
-        let visible = &all[start..];
+        let start = total.saturating_sub(inner_h + self.scroll_from_end);
+        let end = total.saturating_sub(self.scroll_from_end).max(start);
+        let visible = &all[start..end];
         let mut lines: Vec<Line> = Vec::with_capacity(visible.len());
         for (prefix, text) in visible {
             let mut spans: Vec<Span> = Vec::new();

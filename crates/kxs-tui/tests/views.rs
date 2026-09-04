@@ -454,6 +454,59 @@ fn logs_view_renders_lines_and_filters() {
 }
 
 #[test]
+fn logs_restart_clears_buffer_and_scroll_pauses_autoscroll() {
+    use kxs_tui::views::logs::LogsView;
+    let mut app = test_app();
+    let mut view = LogsView::new_with_container(&mut app, {
+        let mut t = pod_target();
+        t.container = Some("c".into());
+        t
+    });
+    let ctx = app.ctx();
+    let id = view.id();
+    let lines: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+    view.on_msg(
+        &Msg::LogLines {
+            view: id,
+            pod: "web".into(),
+            lines: lines.clone(),
+        },
+        &ctx,
+    );
+    assert!(view.title().contains("[50]"));
+    // t toggles timestamps and restarts the streams: buffer must be cleared
+    view.handle_key(KeyEvent::from(KeyCode::Char('t')), &ctx);
+    assert!(view.title().contains("[0]"), "{}", view.title());
+    view.on_msg(
+        &Msg::LogLines {
+            view: id,
+            pod: "web".into(),
+            lines,
+        },
+        &ctx,
+    );
+    let mut t = Terminal::new(TestBackend::new(60, 12)).unwrap();
+    t.draw(|f| view.render(f, f.area(), &theme::get(theme::DEFAULT_ID), ""))
+        .unwrap();
+    assert!(
+        buf_text(&t).contains("line 49"),
+        "autoscroll shows the tail"
+    );
+    view.handle_key(KeyEvent::from(KeyCode::Char('k')), &ctx);
+    t.draw(|f| view.render(f, f.area(), &theme::get(theme::DEFAULT_ID), ""))
+        .unwrap();
+    let text = buf_text(&t);
+    assert!(
+        !text.contains("line 49") && text.contains("line 48"),
+        "{text}"
+    );
+    view.handle_key(KeyEvent::from(KeyCode::Char('G')), &ctx);
+    t.draw(|f| view.render(f, f.area(), &theme::get(theme::DEFAULT_ID), ""))
+        .unwrap();
+    assert!(buf_text(&t).contains("line 49"));
+}
+
+#[test]
 fn events_view_sorts_newest_first_and_colors_warnings() {
     let mut app = test_app();
     let view = kxs_tui::views::events::EventsView::new(&mut app, Some("default".into()));
