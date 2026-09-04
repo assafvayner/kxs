@@ -279,11 +279,39 @@ impl View for ResourcesView {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        vec![
-            Hint::action("d", "describe"),
-            Hint::action("y", "yaml"),
-            Hint::action("ctrl-r", "refresh"),
-        ]
+        let k = self.kind.kind.as_str();
+        let mut h = vec![Hint::action("d", "describe"), Hint::action("y", "yaml")];
+        if kxs_cluster::kinds::views_pods(k) {
+            h.push(Hint::action("enter", "pods"));
+        }
+        if kxs_cluster::kinds::is_pod_owner(k) {
+            h.push(Hint::action("l", "logs"));
+        }
+        h.push(Hint::mutation("e", "edit"));
+        if kxs_cluster::kinds::is_scalable(k) {
+            h.push(Hint::mutation("s", "scale"));
+        }
+        if kxs_cluster::kinds::is_restartable(k) {
+            h.push(Hint::mutation("r", "restart"));
+            h.push(Hint::action("h", "rollout"));
+        }
+        match k {
+            "Deployment" => h.push(Hint::action("z", "replicasets")),
+            "CronJob" => {
+                h.push(Hint::mutation("t", "trigger"));
+                h.push(Hint::mutation("s", "suspend/resume"));
+            }
+            "Node" => {
+                h.push(Hint::mutation("u", "cordon/uncordon"));
+                h.push(Hint::mutation("r", "drain"));
+            }
+            "ConfigMap" | "Secret" => h.push(Hint::action("x", "values")),
+            "Service" => h.push(Hint::action("shift-f", "port-forward")),
+            _ => {}
+        }
+        h.push(Hint::mutation("ctrl-d", "delete"));
+        h.push(Hint::action("ctrl-r", "refresh"));
+        h
     }
 
     fn handle_key(&mut self, key: KeyEvent, _ctx: &AppCtx) -> Vec<Cmd> {

@@ -376,16 +376,17 @@ impl Chrome {
                 ),
             ]);
             f.render_widget(Paragraph::new(ctx_line), area);
-            let h = hint_spans(hints, th, area.width);
             if area.height > 1 {
-                f.render_widget(
-                    Paragraph::new(h),
-                    Rect {
-                        y: area.y + 1,
-                        height: 1,
-                        ..area
-                    },
-                );
+                if let Some(line) = hint_lines(hints, th, area.width, 1).into_iter().next() {
+                    f.render_widget(
+                        Paragraph::new(line),
+                        Rect {
+                            y: area.y + 1,
+                            height: 1,
+                            ..area
+                        },
+                    );
+                }
             }
             return;
         }
@@ -473,12 +474,7 @@ impl Chrome {
                 width: hints_end - hints_start,
                 height: area.height,
             };
-            let columns = hint_columns(hints, th, hint_area.width);
-            let mut lines: Vec<Line> = Vec::new();
-            let per_col = 2;
-            for chunk in columns.chunks(per_col) {
-                lines.push(Line::from(chunk.to_vec()));
-            }
+            let lines = hint_lines(hints, th, hint_area.width, hint_area.height as usize);
             f.render_widget(Paragraph::new(lines), hint_area);
         }
 
@@ -798,34 +794,32 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn hint_spans(hints: &[Hint], th: &Theme, width: u16) -> Line<'static> {
-    let spans = hint_columns(hints, th, width);
-    if spans.is_empty() {
-        Line::default()
-    } else {
-        Line::from(spans)
-    }
-}
-
-/// Hint pairs laid out left-to-right until the width is exhausted; returns
-/// up to two rows' worth as flattened span lists per column pair.
-fn hint_columns(hints: &[Hint], th: &Theme, width: u16) -> Vec<Span<'static>> {
+/// Hints laid out column-major: `rows` per column, columns added left to
+/// right until `width` is exhausted.
+fn hint_lines(hints: &[Hint], th: &Theme, width: u16, rows: usize) -> Vec<Line<'static>> {
+    let rows = rows.max(1);
     let key_style = Style::new()
         .fg(th.colors.yellow)
         .add_modifier(Modifier::BOLD);
     let desc_style = Style::new().fg(th.colors.fg_dim);
-    let mut spans = Vec::new();
+    let mut lines: Vec<Vec<Span<'static>>> = vec![Vec::new(); rows];
     let mut used = 0usize;
-    for h in hints {
-        let item_len = h.key.chars().count() + h.desc.chars().count() + 3;
-        if used + item_len > width as usize {
+    let text_w = |h: &Hint| h.key.chars().count() + 2 + h.desc.chars().count();
+    for chunk in hints.chunks(rows) {
+        let col_w = chunk.iter().map(text_w).max().unwrap_or(0) + 2;
+        if used + col_w > width as usize {
             break;
         }
-        used += item_len;
-        spans.push(Span::styled(format!("<{}>", h.key), key_style));
-        spans.push(Span::styled(format!("{}  ", h.desc), desc_style));
+        for (r, h) in chunk.iter().enumerate() {
+            lines[r].push(Span::styled(format!("<{}>", h.key), key_style));
+            lines[r].push(Span::styled(
+                format!("{}{}", h.desc, " ".repeat(col_w - text_w(h))),
+                desc_style,
+            ));
+        }
+        used += col_w;
     }
-    spans
+    lines.into_iter().map(Line::from).collect()
 }
 
 #[cfg(test)]
@@ -870,6 +864,23 @@ mod tests {
             PromptOutcome::Submit(text) => assert_eq!(text, "des"),
             other => panic!("expected submit, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn hint_lines_fill_columns_top_to_bottom() {
+        let th = crate::theme::get(crate::theme::DEFAULT_ID);
+        let hints: Vec<Hint> = (0..7)
+            .map(|i| Hint::action(["a", "b", "c", "d", "e", "f", "g"][i], "x"))
+            .collect();
+        let lines = hint_lines(&hints, &th, 60, 3);
+        assert_eq!(lines.len(), 3);
+        let row0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            row0.contains("<a>") && row0.contains("<d>") && row0.contains("<g>"),
+            "{row0}"
+        );
+        let row1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(row1.contains("<b>") && row1.contains("<e>"), "{row1}");
     }
 
     #[test]

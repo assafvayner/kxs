@@ -380,6 +380,7 @@ impl View for PodsView {
             Hint::action("shift-l", "logs all"),
             Hint::action("d", "describe"),
             Hint::action("y", "yaml"),
+            Hint::action("ctrl-r", "refresh"),
         ]
     }
 
@@ -418,6 +419,11 @@ impl View for PodsView {
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.selected = move_selection(&keys, self.selected.as_deref(), -page);
                 vec![]
+            }
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let mut cmds = self.stop_old();
+                cmds.push(self.restart_watch());
+                cmds
             }
             KeyCode::Char(c) if c.is_ascii_uppercase() => {
                 let Some(field) = self.sort_key_for(c) else {
