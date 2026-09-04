@@ -107,20 +107,21 @@ async fn drive(
     // parking until the next stdout write or an explicit stop.
     let sink_closed = std::sync::Arc::new(tokio::sync::Notify::new());
 
+    // Stdout EOF: the remote command exited. The control loop waits briefly for
+    // the status future so the exit message is reported exactly once.
+    let stdout_eof = std::sync::Arc::new(tokio::sync::Notify::new());
+    let stdout_eof_pump = stdout_eof.clone();
+
     // stdout pump -> send (base64)
     let send = std::sync::Arc::new(send);
     let send_out = send.clone();
-    // EOF on stdout is the reliable "remote shell exited" signal: the kubelet
-    // closes the stream when the command exits, and the status future may not
-    // resolve on a plain connection close, so surface Closed from here.
-    let send_end = send.clone();
     let sink_closed_pump = sink_closed.clone();
     tokio::spawn(async move {
         let mut buf = [0u8; 8192];
         loop {
             match out.read(&mut buf).await {
                 Ok(0) => {
-                    let _ = send_end(ExecEvent::Closed { message: None });
+                    stdout_eof_pump.notify_one();
                     break;
                 }
                 Ok(n) => {
@@ -131,7 +132,7 @@ async fn drive(
                     }
                 }
                 Err(_) => {
-                    let _ = send_end(ExecEvent::Closed { message: None });
+                    stdout_eof_pump.notify_one();
                     break;
                 }
             }
@@ -141,6 +142,7 @@ async fn drive(
     // control loop: stdin, resize, stop, and completion (status taken exactly once above)
     let send_end = send.clone();
     let sink_closed_ctrl = sink_closed.clone();
+    let stdout_eof_ctrl = stdout_eof.clone();
     tokio::spawn(async move {
         tokio::pin!(status_fut);
         let mut stdin_open = true;
@@ -158,6 +160,22 @@ async fn drive(
                     // leaking the websocket until the next stdout write.
                     proc.abort();
                     let _ = send_end(ExecEvent::Closed { message: None });
+                    break;
+                }
+                _ = stdout_eof_ctrl.notified() => {
+                    // The remote command exited; give the status future a short
+                    // window so the exit message lands on the single Closed event.
+                    let msg = match tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        &mut status_fut,
+                    )
+                    .await
+                    {
+                        Ok(status) => status.and_then(|s| s.message.or(s.reason)),
+                        Err(_) => None,
+                    };
+                    proc.abort();
+                    let _ = send_end(ExecEvent::Closed { message: msg });
                     break;
                 }
                 msg = stdin_rx.recv(), if stdin_open => {
