@@ -103,6 +103,33 @@ fn contexts_view_renders_rows_and_status() {
 }
 
 #[test]
+fn contexts_view_pings_at_most_four_at_a_time() {
+    let mut app = test_app();
+    // ContextsView::new reads the (empty) store; inject rows through the store instead:
+    // load a kubeconfig with 6 contexts
+    let yaml = (0..6)
+        .map(|i| format!("- name: c{i}\n  context: {{cluster: c{i}, user: u}}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let kc = format!("apiVersion: v1\nkind: Config\nclusters: []\nusers: []\ncontexts:\n{yaml}\n");
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), kc).unwrap();
+    let store = kxs_core::kubeconfig::store::KubeconfigStore::load_tolerant(vec![file
+        .path()
+        .to_path_buf()])
+    .0;
+    app.sessions.lock().unwrap().store = store;
+    let mut view = ContextsView::new(&mut app);
+    let cmds = view.on_msg(&Msg::Tick, &app.ctx());
+    assert_eq!(
+        cmds.iter()
+            .filter(|c| matches!(c, Cmd::Ping { .. }))
+            .count(),
+        4
+    );
+}
+
+#[test]
 fn resources_view_renders_columns_and_rows() {
     let mut app = test_app();
     let view = resources_view(&mut app);

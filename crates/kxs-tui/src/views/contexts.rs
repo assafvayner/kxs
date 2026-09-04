@@ -17,6 +17,8 @@ use crate::theme::Theme;
 use crate::view::{Hint, View};
 use crate::AppCtx;
 
+const MAX_PINGS_IN_FLIGHT: usize = 4;
+
 pub struct ContextsView {
     id: u64,
     rows: Vec<Row0>,
@@ -79,6 +81,9 @@ impl ContextsView {
     fn ping_missing(&mut self) -> Vec<Cmd> {
         let mut cmds = vec![];
         for name in self.rows.iter().map(|r| r.name.clone()) {
+            if self.pending.len() >= MAX_PINGS_IN_FLIGHT {
+                break;
+            }
             if !self.pings.contains_key(&name) && !self.pending.contains(&name) {
                 self.pending.insert(name.clone());
                 cmds.push(Cmd::Ping { context: name });

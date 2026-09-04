@@ -79,22 +79,31 @@ pub fn load() -> (Config, Option<String>) {
 }
 
 pub fn write(cfg: &Config) -> Result<(), String> {
-    let Some(path) = config_path() else {
-        return Err("no config directory".into());
-    };
+    let path = config_path().ok_or("no config directory")?;
+    write_to(cfg, &path)
+}
+
+/// Atomic write: temp file next to the target, 0600, then rename.
+pub fn write_to(cfg: &Config, path: &std::path::Path) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let text = toml::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    // 0600 like kubeconfig itself; the file holds no secrets but context names
-    std::fs::File::create(&path)
-        .and_then(|mut f| {
-            use std::io::Write;
-            f.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
-            write!(f, "{text}")
-        })
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    let tmp = path.with_extension("toml.tmp");
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| e.to_string())?;
+        f.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -136,5 +145,16 @@ mod tests {
         let cfg: Result<Config, _> = toml::from_str("future_field = 1\nmetrics_interval_secs = 5");
         assert!(cfg.is_ok());
         assert_eq!(cfg.unwrap().metrics_interval_secs, 5);
+    }
+
+    #[test]
+    fn write_is_atomic_and_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kxs").join("tui.toml");
+        write_to(&Config::default(), &path).unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        assert!(!dir.path().join("kxs").join("tui.toml.tmp").exists());
     }
 }
