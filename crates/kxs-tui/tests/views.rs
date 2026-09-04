@@ -1569,3 +1569,26 @@ fn service_forward_with_several_ports_opens_a_picker() {
         Cmd::Fetch { what: Fetch::ServiceEndpoint { name, port: 9090, .. }, .. } if name == "web"
     ));
 }
+
+#[test]
+fn modals_render_in_a_25_column_terminal() {
+    let mut app = test_app();
+    let view = resources_view(&mut app);
+    app.push_view(view);
+    app.chrome.open_confirm(
+        "Restart web?".into(),
+        "detail".into(),
+        1,
+        kxs_tui::cmd::Mutation::Restart {
+            kind: pod_kind(),
+            ns: "default".into(),
+            name: "web".into(),
+        },
+    );
+    let mut t = Terminal::new(TestBackend::new(25, 12)).unwrap();
+    t.draw(|f| app.render(f)).unwrap(); // must not panic
+    app.chrome.close_all_modals();
+    app.chrome
+        .open_pick("Exec".into(), vec![("a".into(), "b".into())], 1);
+    t.draw(|f| app.render(f)).unwrap();
+}

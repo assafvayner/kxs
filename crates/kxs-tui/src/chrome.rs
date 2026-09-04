@@ -512,8 +512,11 @@ impl Chrome {
     pub fn render_pick(&self, f: &mut Frame, area: Rect, th: &Theme) {
         use ratatui::widgets::{Clear, List, ListItem};
         let Some(pick) = &self.pick else { return };
-        let width = (area.width / 2).clamp(30, 60);
-        let height = (pick.options.len() as u16 + 2).clamp(4, (area.height / 2).max(4));
+        let width = (area.width / 2).clamp(30, 60).min(area.width);
+        let height = (pick.options.len() as u16 + 2)
+            .max(4)
+            .min((area.height / 2).max(4))
+            .min(area.height);
         let x = area.x + (area.width.saturating_sub(width)) / 2;
         let y = area.y + (area.height.saturating_sub(height)) / 2;
         let modal = Rect {
@@ -563,7 +566,7 @@ impl Chrome {
     }
 
     fn modal_frame(&self, area: Rect, width: u16, height: u16) -> Rect {
-        let width = width.clamp(30, area.width);
+        let width = width.min(area.width).max(area.width.min(30));
         let height = height.min(area.height);
         Rect {
             x: area.x + (area.width.saturating_sub(width)) / 2,
