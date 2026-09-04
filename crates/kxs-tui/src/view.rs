@@ -118,13 +118,28 @@ pub trait View {
     }
 }
 
-/// Title suffix for a watch status event. `live` clears the indicator.
+/// Title suffix for a watch status event. `live`/`connected` clear the
+/// indicator, `error` shows the message, and everything else (e.g.
+/// `reconnecting`) shows a reconnecting indicator with the message.
 pub fn status_suffix(state: &str, message: Option<&str>) -> Option<String> {
     match (state, message) {
         ("live", _) | ("connected", _) => None,
-        ("error", Some(m)) => Some(format!("⟳ {m}")),
+        ("error", Some(m)) => Some(format!("⟳ {}", short(m))),
         ("error", None) => Some("⟳ error".into()),
-        (_, Some(m)) => Some(format!("⟳ reconnecting: {m}")),
+        (_, Some(m)) => Some(format!("⟳ reconnecting: {}", short(m))),
         (_, None) => Some("⟳ reconnecting".into()),
     }
+}
+
+/// Sanitize a status message for embedding in a title: first line only,
+/// capped at 60 chars with a trailing `…` when truncated.
+fn short(m: &str) -> String {
+    let first_line = m.split('\n').next().unwrap_or(m);
+    let has_more_lines = first_line.len() != m.len();
+    let truncated_len = first_line.chars().count() > 60;
+    let mut out: String = first_line.chars().take(60).collect();
+    if truncated_len || has_more_lines {
+        out.push('…');
+    }
+    out
 }

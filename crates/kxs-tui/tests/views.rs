@@ -1109,4 +1109,44 @@ fn live_status_clears_indicator_and_errors_keep_message() {
         &ctx,
     );
     assert!(view.title().contains("⟳ forbidden"), "{}", view.title());
+    view.on_started(
+        kxs_tui::cmd::StopHandle(tokio::sync::oneshot::channel().0),
+        &ctx,
+    );
+    assert!(view.title().contains("⟳ forbidden"), "{}", view.title());
+}
+
+#[test]
+fn pods_status_uses_the_same_mapping() {
+    let mut app = test_app();
+    let mut view = kxs_tui::views::pods::PodsView::new(&mut app, Some("default".into()));
+    let ctx = app.ctx();
+    let id = view.id();
+    view.on_msg(
+        &Msg::Pod {
+            view: id,
+            ev: kxs_cluster::pods::PodEvent::Status {
+                state: "live".into(),
+                message: None,
+            },
+        },
+        &ctx,
+    );
+    assert!(!view.title().contains('⟳'), "{}", view.title());
+    view.on_msg(
+        &Msg::Pod {
+            view: id,
+            ev: kxs_cluster::pods::PodEvent::Status {
+                state: "reconnecting".into(),
+                message: Some("line one\nline two".into()),
+            },
+        },
+        &ctx,
+    );
+    assert!(
+        view.title().contains("⟳ reconnecting: line one"),
+        "{}",
+        view.title()
+    );
+    assert!(!view.title().contains("line two"), "{}", view.title());
 }

@@ -71,6 +71,8 @@ pub struct PodsView {
     /// Pod keys ("ns/name") with a live forward, for the PF column.
     forwarded: std::collections::HashSet<String>,
     status: Option<String>,
+    /// Whether the watch has delivered its initial snapshot.
+    loaded: bool,
     viewport_rows: Cell<u16>,
     scroll: crate::table::Scroll,
 }
@@ -115,6 +117,7 @@ impl PodsView {
             pf_ns_pod: (String::new(), String::new()),
             forwarded: Default::default(),
             status: None,
+            loaded: false,
             viewport_rows: Cell::new(20),
             scroll: Default::default(),
         }
@@ -138,6 +141,7 @@ impl PodsView {
 
     fn restart_watch(&mut self) -> Cmd {
         self.pending = true;
+        self.loaded = false;
         Cmd::StartPodWatch {
             view: self.id,
             ns: self.watched_ns.clone(),
@@ -453,6 +457,7 @@ impl View for PodsView {
                     Snapshot { rows } => {
                         self.rows = rows.clone();
                         self.status = None;
+                        self.loaded = true;
                         if self.selected.is_none() {
                             self.selected = self.rows.first().map(|r| r.key.clone());
                         }
@@ -731,10 +736,12 @@ impl View for PodsView {
             )));
         if self.rows.is_empty() {
             f.render_widget(block, area);
-            let msg = if self.status.is_some() {
-                self.status.clone().unwrap_or_default()
-            } else {
+            let msg = if let Some(status) = &self.status {
+                status.clone()
+            } else if !self.loaded {
                 "loading…".into()
+            } else {
+                "no pods".into()
             };
             f.render_widget(
                 Paragraph::new(msg).style(Style::new().fg(th.colors.fg_dim)),
