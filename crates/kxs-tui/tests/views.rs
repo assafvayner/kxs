@@ -1367,6 +1367,47 @@ fn pods_cpu_sort_keeps_the_filter() {
 }
 
 #[test]
+fn workload_logs_use_the_workload_namespace() {
+    use kxs_tui::cmd::FetchResult;
+    use kxs_tui::views::logs::LogsView;
+    let mut app = test_app();
+    let deploy = ResourceKind {
+        group: "apps".into(),
+        version: "v1".into(),
+        kind: "Deployment".into(),
+        plural: "deployments".into(),
+        namespaced: true,
+        aliases: vec!["deploy".into()],
+    };
+    let target = kxs_tui::view::Target {
+        kind: deploy,
+        ns: Some("kxs-review".into()),
+        name: "web".into(),
+        container: None,
+        desired_replicas: None,
+        suspend: None,
+        unschedulable: None,
+    };
+    let mut view = LogsView::new_workload(&mut app, target);
+    let ctx = app.ctx();
+    let id = view.id();
+    let cmds = view.on_msg(
+        &Msg::Fetched {
+            view: id,
+            result: Ok(FetchResult::PodNames(vec!["web-1".into(), "web-2".into()])),
+        },
+        &ctx,
+    );
+    assert_eq!(cmds.len(), 2);
+    for c in cmds {
+        match c {
+            Cmd::StartLogs { req, .. } => assert_eq!(req.namespace, "kxs-review"),
+            _ => panic!("expected StartLogs"),
+        }
+    }
+}
+
+#[test]
 fn cluster_scoped_view_ignores_namespace() {
     let mut app = test_app();
     let node_kind = ResourceKind {

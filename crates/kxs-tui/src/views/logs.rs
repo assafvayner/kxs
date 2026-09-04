@@ -32,6 +32,9 @@ pub struct LogTarget {
 pub struct LogsView {
     id: u64,
     targets: Vec<LogTarget>,
+    /// Namespace of the pod or workload this view was opened for; used to
+    /// stream pods resolved later (e.g. via `PodNames`) in the right namespace.
+    ns: String,
     /// Workload whose pod names are still being resolved (`l` on an owner).
     pending_workload: Option<Target>,
     /// Waiting for the container picker to resolve.
@@ -56,14 +59,16 @@ impl LogsView {
     /// Single pod (`l` on a Pod row). Container resolution happens on stream
     /// start: single container → use it; several → picker; all → shift-l.
     pub fn new(app: &mut crate::app::App, target: Target, all_containers: bool) -> Self {
+        let ns = target.ns.clone().unwrap_or_default();
         let target = LogTarget {
-            ns: target.ns.clone().unwrap_or_default(),
+            ns: ns.clone(),
             pod: target.name.clone(),
             container: None,
         };
         LogsView {
             id: app.alloc_id(),
             targets: vec![target],
+            ns,
             pending_workload: None,
             pending_pick: false,
             all_containers,
@@ -315,7 +320,7 @@ impl View for LogsView {
                         self.targets = exec
                             .iter()
                             .map(|c| LogTarget {
-                                ns: self.targets[0].ns.clone(),
+                                ns: self.ns.clone(),
                                 pod: self.targets[0].pod.clone(),
                                 container: Some(c.name.clone()),
                             })
@@ -355,11 +360,7 @@ impl View for LogsView {
                     self.targets = names
                         .iter()
                         .map(|pod| LogTarget {
-                            ns: self
-                                .targets
-                                .first()
-                                .map(|t| t.ns.clone())
-                                .unwrap_or_default(),
+                            ns: self.ns.clone(),
                             pod: pod.clone(),
                             container: None,
                         })
