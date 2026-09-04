@@ -216,6 +216,11 @@ async fn fetch(sessions: &Shared, what: Fetch) -> Result<FetchResult, String> {
                 &kxs_cluster::pods::list_container_info(sess.client.clone(), &ns, &pod).await?,
             ),
         }),
+        Fetch::ServicePorts { ns, name } => Ok(FetchResult::ServicePorts {
+            ns: ns.clone(),
+            name: name.clone(),
+            ports: kxs_cluster::workloads::service_ports(sess.client.clone(), &ns, &name).await?,
+        }),
         Fetch::ServiceEndpoint { ns, name, port } => {
             let (pod, container_port) = kxs_cluster::workloads::resolve_service_endpoint(
                 sess.client.clone(),
@@ -224,7 +229,11 @@ async fn fetch(sessions: &Shared, what: Fetch) -> Result<FetchResult, String> {
                 port,
             )
             .await?;
-            Ok(FetchResult::Endpoint(pod, container_port))
+            Ok(FetchResult::Endpoint {
+                ns,
+                pod,
+                port: container_port,
+            })
         }
     }
 }

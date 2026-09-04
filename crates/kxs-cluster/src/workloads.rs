@@ -346,6 +346,44 @@ fn manual_job_name(cronjob: &str, ts: u64) -> String {
     format!("{}{suffix}", base.trim_end_matches('-'))
 }
 
+/// Declared `spec.ports[].port` values of a Service with a label per port
+/// (the port name, else its targetPort).
+pub fn service_port_list(svc: &Service) -> Vec<(u16, String)> {
+    svc.spec
+        .as_ref()
+        .and_then(|s| s.ports.clone())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|p| {
+            let port = u16::try_from(p.port).ok()?;
+            let label = match (&p.name, &p.target_port) {
+                (Some(n), _) => n.clone(),
+                (None, Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(t))) => {
+                    format!("-> {t}")
+                }
+                (
+                    None,
+                    Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::String(t)),
+                ) => {
+                    format!("-> {t}")
+                }
+                (None, None) => String::new(),
+            };
+            Some((port, label))
+        })
+        .collect()
+}
+
+pub async fn service_ports(
+    client: Client,
+    namespace: &str,
+    service: &str,
+) -> Result<Vec<(u16, String)>, String> {
+    let svcs: Api<Service> = Api::namespaced(client, namespace);
+    let svc = svcs.get(service).await.map_err(|e| e.to_string())?;
+    Ok(service_port_list(&svc))
+}
+
 /// Resolve a Service port to a ready backing (pod, containerPort) via its
 /// Endpoints — the target `kubectl port-forward svc/<name>` would pick.
 pub async fn resolve_service_endpoint(
@@ -471,6 +509,18 @@ pub async fn config_values(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn service_port_list_reads_ports_and_names() {
+        let svc: Service = serde_json::from_value(json!({
+            "metadata": {"name": "web"},
+            "spec": {"ports": [{"port": 8080, "name": "http", "targetPort": "http"}, {"port": 9090}]}
+        }))
+        .unwrap();
+        let ports = service_port_list(&svc);
+        assert_eq!(ports[0], (8080, "http".to_string()));
+        assert_eq!(ports[1].0, 9090);
+    }
 
     #[test]
     fn selector_from_match_labels() {

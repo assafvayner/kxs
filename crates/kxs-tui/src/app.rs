@@ -1039,7 +1039,8 @@ impl App {
         }]
     }
 
-    /// shift-f on a Service: resolve a ready backing pod + port.
+    /// shift-f on a Service: list its ports; the view picks one and resolves
+    /// a ready backing pod.
     fn begin_service_forward(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
         let view = self.views.last().map(|v| v.id());
         let Some(view) = view else { return vec![] };
@@ -1049,10 +1050,9 @@ impl App {
         }
         vec![Cmd::Fetch {
             view,
-            what: crate::cmd::Fetch::ServiceEndpoint {
+            what: crate::cmd::Fetch::ServicePorts {
                 ns: t.ns.clone().unwrap_or_default(),
                 name: t.name.clone(),
-                port: 80,
             },
         }]
     }

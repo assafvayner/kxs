@@ -1481,3 +1481,91 @@ fn containers_target_matches_display_order() {
     // first row shown is the regular container
     assert_eq!(view.target().unwrap().container.as_deref(), Some("web"));
 }
+
+#[test]
+fn service_forward_resolves_single_port_then_endpoint() {
+    use kxs_tui::cmd::{Fetch, FetchResult};
+    let mut app = test_app();
+    let svc_kind = ResourceKind {
+        group: "".into(),
+        version: "v1".into(),
+        kind: "Service".into(),
+        plural: "services".into(),
+        namespaced: true,
+        aliases: vec!["svc".into()],
+    };
+    let mut view = ResourcesView::new(&mut app, svc_kind, Some("kxs-review".into()));
+    let ctx = app.ctx();
+    let id = view.id();
+    let cmds = view.on_msg(
+        &Msg::Fetched {
+            view: id,
+            result: Ok(FetchResult::ServicePorts {
+                ns: "kxs-review".into(),
+                name: "web".into(),
+                ports: vec![(8080, "http".into())],
+            }),
+        },
+        &ctx,
+    );
+    assert!(matches!(
+        &cmds[0],
+        Cmd::Fetch { what: Fetch::ServiceEndpoint { ns, name, port: 8080 }, .. }
+            if ns == "kxs-review" && name == "web"
+    ));
+    let cmds = view.on_msg(
+        &Msg::Fetched {
+            view: id,
+            result: Ok(FetchResult::Endpoint {
+                ns: "kxs-review".into(),
+                pod: "web-1".into(),
+                port: 80,
+            }),
+        },
+        &ctx,
+    );
+    assert!(matches!(
+        &cmds[0],
+        Cmd::StartForward { ns, pod, port: 80, .. } if ns == "kxs-review" && pod == "web-1"
+    ));
+}
+
+#[test]
+fn service_forward_with_several_ports_opens_a_picker() {
+    use kxs_tui::cmd::{Fetch, FetchResult};
+    let mut app = test_app();
+    let svc_kind = ResourceKind {
+        group: "".into(),
+        version: "v1".into(),
+        kind: "Service".into(),
+        plural: "services".into(),
+        namespaced: true,
+        aliases: vec!["svc".into()],
+    };
+    let mut view = ResourcesView::new(&mut app, svc_kind, Some("kxs-review".into()));
+    let ctx = app.ctx();
+    let id = view.id();
+    let cmds = view.on_msg(
+        &Msg::Fetched {
+            view: id,
+            result: Ok(FetchResult::ServicePorts {
+                ns: "kxs-review".into(),
+                name: "web".into(),
+                ports: vec![(8080, "http".into()), (9090, "metrics".into())],
+            }),
+        },
+        &ctx,
+    );
+    assert!(matches!(&cmds[0], Cmd::PickContainer { options, .. } if options.len() == 2));
+    let cmds = view.on_msg(
+        &Msg::Picked {
+            view: id,
+            choice: Some("9090".into()),
+        },
+        &ctx,
+    );
+    assert!(matches!(
+        &cmds[0],
+        Cmd::Fetch { what: Fetch::ServiceEndpoint { name, port: 9090, .. }, .. } if name == "web"
+    ));
+}

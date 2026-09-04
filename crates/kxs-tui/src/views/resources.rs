@@ -45,6 +45,8 @@ pub struct ResourcesView {
     pending_attach: bool,
     pending_pf: bool,
     pf_ns_pod: (String, String),
+    /// Service (ns, name) awaiting a port pick for shift-f.
+    pending_svc: Option<(String, String)>,
     status: Option<String>,
     viewport_rows: Cell<u16>,
     scroll: crate::table::Scroll,
@@ -71,6 +73,7 @@ impl ResourcesView {
             pending_attach: false,
             pending_pf: false,
             pf_ns_pod: (String::new(), String::new()),
+            pending_svc: None,
             status: None,
             viewport_rows: Cell::new(20),
             scroll: Default::default(),
@@ -451,18 +454,53 @@ impl View for ResourcesView {
                 }
             }
             crate::msg::Msg::Fetched {
-                result: Ok(crate::cmd::FetchResult::Endpoint(pod, port)),
+                result: Ok(crate::cmd::FetchResult::ServicePorts { ns, name, ports }),
                 ..
-            } => {
-                self.pending_pf = false;
-                vec![Cmd::StartForward {
+            } => match ports.len() {
+                0 => {
+                    self.status = Some(format!("service {name} has no ports"));
+                    vec![]
+                }
+                1 => vec![Cmd::Fetch {
                     view: self.id,
-                    ns: self.pf_ns_pod.0.clone(),
-                    pod: pod.clone(),
-                    port: *port,
-                }]
-            }
+                    what: crate::cmd::Fetch::ServiceEndpoint {
+                        ns: ns.clone(),
+                        name: name.clone(),
+                        port: ports[0].0,
+                    },
+                }],
+                _ => {
+                    self.pending_svc = Some((ns.clone(), name.clone()));
+                    vec![Cmd::PickContainer {
+                        view: self.id,
+                        ns: ns.clone(),
+                        pod: name.clone(),
+                        options: ports
+                            .iter()
+                            .map(|(p, label)| (p.to_string(), label.clone()))
+                            .collect(),
+                    }]
+                }
+            },
+            crate::msg::Msg::Fetched {
+                result: Ok(crate::cmd::FetchResult::Endpoint { ns, pod, port }),
+                ..
+            } => vec![Cmd::StartForward {
+                view: self.id,
+                ns: ns.clone(),
+                pod: pod.clone(),
+                port: *port,
+            }],
             crate::msg::Msg::Picked { choice, .. } => {
+                if let Some((ns, name)) = self.pending_svc.take() {
+                    return match choice.as_deref().and_then(|c| c.parse::<u16>().ok()) {
+                        Some(port) => vec![Cmd::Fetch {
+                            view: self.id,
+                            what: crate::cmd::Fetch::ServiceEndpoint { ns, name, port },
+                        }],
+                        None => vec![],
+                    };
+                }
                 let Some(choice) = choice else {
                     self.pending_exec = false;
                     self.pending_attach = false;

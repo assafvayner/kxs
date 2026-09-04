@@ -601,13 +601,13 @@ impl View for PodsView {
                 }
             }
             crate::msg::Msg::Fetched {
-                result: Ok(crate::cmd::FetchResult::Endpoint(pod, port)),
+                result: Ok(crate::cmd::FetchResult::Endpoint { ns, pod, port }),
                 ..
             } => {
                 self.pending_pf = false;
                 vec![Cmd::StartForward {
                     view: self.id,
-                    ns: self.pf_ns_pod.0.clone(),
+                    ns: ns.clone(),
                     pod: pod.clone(),
                     port: *port,
                 }]

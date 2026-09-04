@@ -55,6 +55,11 @@ pub enum Fetch {
         name: String,
         kind: String,
     },
+    /// Declared ports of a Service, to pick one to forward.
+    ServicePorts {
+        ns: String,
+        name: String,
+    },
     ServiceEndpoint {
         ns: String,
         name: String,
@@ -165,8 +170,18 @@ pub enum FetchResult {
     ContainerPicked(String),
     Rollout(Vec<kxs_cluster::workloads::RolloutRevision>),
     Values(Vec<kxs_cluster::workloads::ConfigEntry>),
-    /// Resolved (pod, containerPort) behind a Service.
-    Endpoint(String, u16),
+    /// Declared Service ports as (port, label).
+    ServicePorts {
+        ns: String,
+        name: String,
+        ports: Vec<(u16, String)>,
+    },
+    /// Resolved backing pod and containerPort behind a Service.
+    Endpoint {
+        ns: String,
+        pod: String,
+        port: u16,
+    },
     ExecContainers {
         ns: String,
         pod: String,
