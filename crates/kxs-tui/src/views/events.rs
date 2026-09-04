@@ -31,6 +31,7 @@ pub struct EventsView {
     pending: bool,
     status: Option<String>,
     viewport_rows: Cell<u16>,
+    scroll: crate::table::Scroll,
 }
 
 impl EventsView {
@@ -45,6 +46,7 @@ impl EventsView {
             pending: false,
             status: None,
             viewport_rows: Cell::new(20),
+            scroll: Default::default(),
         }
     }
 
@@ -81,18 +83,19 @@ impl EventsView {
         let reason = column_index(&t.columns, "Reason");
         let object = column_index(&t.columns, "Object");
         let message = column_index(&t.columns, "Message");
-        let needle = self.filter.to_lowercase();
+        let pred = kxs_cluster::table::filter_predicate(&self.filter);
         rows.into_iter()
-            .filter(|r| {
-                event_filter_text(r, &[reason, object, message])
-                    .to_lowercase()
-                    .contains(&needle)
-            })
+            .filter(|r| pred(&event_filter_text(r, &[reason, object, message])))
             .collect()
     }
 
     fn keys(&self) -> Vec<String> {
         self.visible().iter().map(|r| r.key.clone()).collect()
+    }
+
+    fn selected_index(&self) -> Option<usize> {
+        let sel = self.selected.as_deref()?;
+        self.visible().iter().position(|r| r.key == sel)
     }
 }
 
@@ -129,7 +132,7 @@ impl View for EventsView {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        vec![Hint::action("r", "refresh")]
+        vec![Hint::action("ctrl-r", "refresh")]
     }
 
     fn handle_key(&mut self, key: KeyEvent, _ctx: &AppCtx) -> Vec<Cmd> {
@@ -168,7 +171,7 @@ impl View for EventsView {
                 self.selected = move_selection(&keys, self.selected.as_deref(), -page);
                 vec![]
             }
-            KeyCode::Char('r') => {
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let mut cmds = self.stop_old();
                 cmds.push(self.restart_watch());
                 cmds
@@ -296,11 +299,9 @@ impl View for EventsView {
             })
         });
         let constraints: Vec<Constraint> = widths.iter().map(|w| Constraint::Length(*w)).collect();
-        f.render_widget(
-            Table::new(rows, constraints)
-                .header(Row::new(t.columns.clone()).style(Style::new().fg(th.colors.fg_dim).bold()))
-                .block(block),
-            area,
-        );
+        let table = Table::new(rows, constraints)
+            .header(Row::new(t.columns.clone()).style(Style::new().fg(th.colors.fg_dim).bold()))
+            .block(block);
+        self.scroll.render(f, area, table, self.selected_index());
     }
 }

@@ -49,6 +49,18 @@ pub fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("kxs").join("tui.toml"))
 }
 
+/// Where `ctrl-s` writes resource dumps, k9s' screendump directory.
+pub fn dump_dir() -> Result<PathBuf, String> {
+    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
+        if !xdg.is_empty() {
+            return Ok(PathBuf::from(xdg).join("kxs").join("dumps"));
+        }
+    }
+    dirs::data_local_dir()
+        .map(|d| d.join("kxs").join("dumps"))
+        .ok_or_else(|| "no local data directory for dumps".to_string())
+}
+
 /// Tolerant read: a bad file is a warning and defaults, never an error.
 pub fn load() -> (Config, Option<String>) {
     let Some(path) = config_path() else {

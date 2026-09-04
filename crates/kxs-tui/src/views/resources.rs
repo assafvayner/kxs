@@ -14,7 +14,6 @@ use kxs_cluster::table::{
     cycle_sort, filter_predicate, sort_indicator, sort_rows, split_filter, Sort,
 };
 
-use crate::clipboard;
 use crate::cmd::{Cmd, StopHandle};
 use crate::select::move_selection;
 use crate::theme::Theme;
@@ -29,6 +28,10 @@ pub struct ResourcesView {
     filter: String,
     labels: Option<String>,
     name_filter: String,
+    /// `ctrl-z`: show only rows whose status reads as a fault.
+    faults_only: bool,
+    /// `ctrl-w`: keep every column even when the terminal is narrow.
+    wide: bool,
     table: Option<ResourceTable>,
     /// Sort key is the original cell index; `cells.len()` is the synthetic AGE column.
     sort: Option<Sort>,
@@ -38,10 +41,13 @@ pub struct ResourcesView {
     pending: bool,
     /// Awaiting container resolution for exec / port-forward.
     pending_exec: bool,
+    /// Awaiting container resolution for `a` attach.
+    pending_attach: bool,
     pending_pf: bool,
     pf_ns_pod: (String, String),
     status: Option<String>,
     viewport_rows: Cell<u16>,
+    scroll: crate::table::Scroll,
 }
 
 impl ResourcesView {
@@ -53,16 +59,20 @@ impl ResourcesView {
             filter: String::new(),
             labels: None,
             name_filter: String::new(),
+            faults_only: false,
+            wide: false,
             table: None,
             sort: None,
             selected: None,
             handle: None,
             pending: false,
             pending_exec: false,
+            pending_attach: false,
             pending_pf: false,
             pf_ns_pod: (String::new(), String::new()),
             status: None,
             viewport_rows: Cell::new(20),
+            scroll: Default::default(),
         }
     }
 
@@ -118,7 +128,7 @@ impl ResourcesView {
         }
         // borders + one space between columns
         let overhead = |n: usize| 2u16 + (n as u16).saturating_sub(1);
-        while cols.len() > 2 {
+        while !self.wide && cols.len() > 2 {
             let n = cols.len();
             let needed: u16 = cols.iter().map(|(_, w)| *w).sum::<u16>() + overhead(n);
             if needed <= total {
@@ -139,7 +149,13 @@ impl ResourcesView {
     fn visible_rows(&self) -> Vec<ResourceRow> {
         let Some(t) = &self.table else { return vec![] };
         let pred = filter_predicate(&self.name_filter);
-        let rows: Vec<ResourceRow> = t.rows.iter().filter(|r| pred(&r.name)).cloned().collect();
+        let rows: Vec<ResourceRow> = t
+            .rows
+            .iter()
+            .filter(|r| pred(&r.name))
+            .filter(|r| !self.faults_only || row_is_faulty(r))
+            .cloned()
+            .collect();
         match self.sort {
             Some(s) => sort_rows(&rows, s.key, s.dir),
             None => rows,
@@ -148,6 +164,11 @@ impl ResourcesView {
 
     fn keys(&self) -> Vec<String> {
         self.visible_rows().iter().map(|r| r.key.clone()).collect()
+    }
+
+    fn selected_index(&self) -> Option<usize> {
+        let sel = self.selected.as_deref()?;
+        self.visible_rows().iter().position(|r| r.key == sel)
     }
 
     fn target_of(&self, r: &ResourceRow) -> crate::view::Target {
@@ -169,6 +190,9 @@ impl ResourcesView {
                 .iter()
                 .find(|c| c.eq_ignore_ascii_case("true") || c.eq_ignore_ascii_case("false"))
                 .map(|c| c.eq_ignore_ascii_case("true")),
+            // Node STATUS reads "Ready,SchedulingDisabled" when cordoned
+            unschedulable: (self.kind.kind == "Node")
+                .then(|| r.cells.iter().any(|c| c.contains("SchedulingDisabled"))),
         }
     }
 
@@ -225,7 +249,7 @@ impl View for ResourcesView {
         vec![
             Hint::action("d", "describe"),
             Hint::action("y", "yaml"),
-            Hint::action("r", "refresh"),
+            Hint::action("ctrl-r", "refresh"),
         ]
     }
 
@@ -265,13 +289,7 @@ impl View for ResourcesView {
                 self.selected = move_selection(&keys, self.selected.as_deref(), -page);
                 vec![]
             }
-            KeyCode::Char('c') => {
-                if let Some(sel) = &self.selected {
-                    clipboard::copy(sel);
-                }
-                vec![]
-            }
-            KeyCode::Char('r') => {
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let mut cmds = self.stop_old();
                 cmds.push(self.restart_watch());
                 cmds
@@ -302,6 +320,42 @@ impl View for ResourcesView {
 
     fn on_msg(&mut self, msg: &crate::msg::Msg, ctx: &AppCtx) -> Vec<Cmd> {
         match msg {
+            crate::msg::Msg::Fetched {
+                result: Ok(crate::cmd::FetchResult::AttachContainers { ns, pod, infos }),
+                ..
+            } => {
+                self.pf_ns_pod = (ns.clone(), pod.clone());
+                self.pending_attach = false;
+                let attachable: Vec<kxs_cluster::pods::ContainerInfo> = infos
+                    .iter()
+                    .filter(|c| !c.init_container)
+                    .cloned()
+                    .collect();
+                match attachable.len() {
+                    0 => {
+                        self.status = Some("no attachable containers".into());
+                        vec![]
+                    }
+                    1 => vec![Cmd::Suspend(crate::cmd::SuspendAction::Attach {
+                        ns: self.pf_ns_pod.0.clone(),
+                        pod: self.pf_ns_pod.1.clone(),
+                        container: Some(attachable[0].name.clone()),
+                    })],
+                    _ => {
+                        let options = attachable
+                            .iter()
+                            .map(|c| (c.name.clone(), c.image.clone()))
+                            .collect();
+                        self.pending_attach = true;
+                        vec![Cmd::PickExec {
+                            view: self.id,
+                            ns: self.pf_ns_pod.0.clone(),
+                            pod: self.pf_ns_pod.1.clone(),
+                            options,
+                        }]
+                    }
+                }
+            }
             crate::msg::Msg::Fetched {
                 result: Ok(crate::cmd::FetchResult::ExecContainers { ns, pod, infos }),
                 ..
@@ -382,10 +436,18 @@ impl View for ResourcesView {
             crate::msg::Msg::Picked { choice, .. } => {
                 let Some(choice) = choice else {
                     self.pending_exec = false;
+                    self.pending_attach = false;
                     self.pending_pf = false;
                     return vec![];
                 };
-                if self.pending_exec {
+                if self.pending_attach {
+                    self.pending_attach = false;
+                    vec![Cmd::Suspend(crate::cmd::SuspendAction::Attach {
+                        ns: self.pf_ns_pod.0.clone(),
+                        pod: self.pf_ns_pod.1.clone(),
+                        container: Some(choice.clone()),
+                    })]
+                } else if self.pending_exec {
                     self.pending_exec = false;
                     vec![Cmd::Suspend(crate::cmd::SuspendAction::Exec {
                         ns: self.pf_ns_pod.0.clone(),
@@ -486,6 +548,23 @@ impl View for ResourcesView {
         true
     }
 
+    fn toggle_wide(&mut self) -> Option<bool> {
+        self.wide = !self.wide;
+        Some(self.wide)
+    }
+
+    fn toggle_faults(&mut self) -> Option<bool> {
+        self.faults_only = !self.faults_only;
+        let keys = self.keys();
+        if !keys
+            .iter()
+            .any(|k| Some(k.as_str()) == self.selected.as_deref())
+        {
+            self.selected = keys.first().cloned();
+        }
+        Some(self.faults_only)
+    }
+
     fn target(&self) -> Option<crate::view::Target> {
         let rows = self.visible_rows();
         rows.iter()
@@ -557,6 +636,35 @@ impl View for ResourcesView {
         let table = Table::new(rows, constraints)
             .header(Row::new(header_cells))
             .block(block);
-        f.render_widget(table, area);
+        self.scroll.render(f, area, table, self.selected_index());
     }
+}
+
+/// `ctrl-z` predicate for a server-side table row: a healthy row is one whose
+/// cells carry no failure word and whose `n/m` readiness cells are complete.
+fn row_is_faulty(r: &ResourceRow) -> bool {
+    const BAD: [&str; 9] = [
+        "Error",
+        "Failed",
+        "CrashLoopBackOff",
+        "ImagePullBackOff",
+        "ErrImagePull",
+        "Pending",
+        "Unknown",
+        "NotReady",
+        "Evicted",
+    ];
+    for c in &r.cells {
+        if BAD.iter().any(|b| c.contains(b)) {
+            return true;
+        }
+        if let Some((a, b)) = c.split_once('/') {
+            if let (Ok(a), Ok(b)) = (a.trim().parse::<i64>(), b.trim().parse::<i64>()) {
+                if a < b {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }

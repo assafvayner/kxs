@@ -65,6 +65,17 @@ pub enum Fetch {
         ns: String,
         pod: String,
     },
+    /// Containers of a pod, fetched to resolve an attach target.
+    AttachTargets {
+        ns: String,
+        pod: String,
+    },
+    /// `ownerReferences[0]` of a resource, for jump-to-owner.
+    Owner {
+        kind: ResourceKind,
+        ns: Option<String>,
+        name: String,
+    },
     /// Container port choices of a pod, fetched to open a forward.
     ForwardPorts {
         ns: String,
@@ -133,6 +144,12 @@ pub enum SuspendAction {
         pod: String,
         container: Option<String>,
     },
+    /// `a`: attach to the container's running process on the real terminal.
+    Attach {
+        ns: String,
+        pod: String,
+        container: Option<String>,
+    },
 }
 
 /// Result payloads for `Cmd::Fetch`.
@@ -155,6 +172,13 @@ pub enum FetchResult {
         pod: String,
         infos: Vec<kxs_cluster::pods::ContainerInfo>,
     },
+    AttachContainers {
+        ns: String,
+        pod: String,
+        infos: Vec<kxs_cluster::pods::ContainerInfo>,
+    },
+    /// (kind, name) of the owner, or `None` when the resource has no owner.
+    Owner(Option<(String, String)>),
     ForwardPorts {
         ns: String,
         pod: String,
@@ -240,6 +264,17 @@ pub enum Cmd {
     },
     /// Pop the top view (e.g. a cancelled picker).
     PopView,
+    /// Open a kind by alias/name, replacing the stack (Aliases view enter).
+    OpenKind {
+        query: String,
+    },
+    /// `ctrl-s`: write the resource's YAML to a file under the dump dir.
+    SaveResource {
+        view: ViewId,
+        kind: ResourceKind,
+        ns: Option<String>,
+        name: String,
+    },
     /// Namespace switch requested by a view; the runtime applies it via App
     /// and records the favorite.
     SwitchNamespace {

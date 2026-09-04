@@ -20,6 +20,8 @@ pub struct NamespacesView {
     loaded: bool,
     in_flight: bool,
     error: Option<String>,
+    scroll: crate::table::Scroll,
+    filter: String,
 }
 
 impl NamespacesView {
@@ -31,7 +33,24 @@ impl NamespacesView {
             loaded: false,
             in_flight: false,
             error: None,
+            scroll: Default::default(),
+            filter: String::new(),
         }
+    }
+}
+
+impl NamespacesView {
+    /// Rows surviving the `/` filter; the "all" row always survives.
+    fn visible(&self) -> Vec<Option<String>> {
+        let pred = kxs_cluster::table::filter_predicate(&self.filter);
+        self.namespaces
+            .iter()
+            .filter(|ns| match ns {
+                None => true,
+                Some(n) => pred(n),
+            })
+            .cloned()
+            .collect()
     }
 }
 
@@ -41,7 +60,7 @@ impl View for NamespacesView {
     }
 
     fn title(&self) -> String {
-        format!("Namespaces[{}]", self.namespaces.len())
+        format!("Namespaces[{}]", self.visible().len())
     }
 
     fn crumb(&self) -> String {
@@ -49,18 +68,25 @@ impl View for NamespacesView {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        vec![Hint::action("enter", "switch")]
+        vec![
+            Hint::action("enter/u", "switch"),
+            Hint::action("/", "filter"),
+        ]
     }
 
     fn handle_key(&mut self, key: KeyEvent, _ctx: &AppCtx) -> Vec<Cmd> {
-        let last = self.namespaces.len().saturating_sub(1);
+        let visible = self.visible();
+        let last = visible.len().saturating_sub(1);
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => self.selected = (self.selected + 1).min(last),
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
+            KeyCode::PageDown => self.selected = (self.selected + 10).min(last),
+            KeyCode::PageUp => self.selected = self.selected.saturating_sub(10),
             KeyCode::Home | KeyCode::Char('g') => self.selected = 0,
             KeyCode::End | KeyCode::Char('G') => self.selected = last,
-            KeyCode::Enter => {
-                return match self.namespaces.get(self.selected) {
+            // k9s switches with `u` (use) as well as enter
+            KeyCode::Enter | KeyCode::Char('u') => {
+                return match visible.get(self.selected) {
                     Some(ns) => {
                         vec![Cmd::SwitchNamespace { ns: ns.clone() }]
                     }
@@ -103,11 +129,22 @@ impl View for NamespacesView {
     }
 
     fn wants_filter(&self) -> bool {
-        false
+        true
+    }
+
+    fn filter(&self) -> String {
+        self.filter.clone()
+    }
+
+    fn set_filter(&mut self, filter: &str) -> Vec<Cmd> {
+        self.filter = filter.to_string();
+        self.selected = self.selected.min(self.visible().len().saturating_sub(1));
+        vec![]
     }
 
     fn render(&self, f: &mut Frame, area: Rect, th: &Theme, _filter: &str) {
-        let rows = self.namespaces.iter().enumerate().map(|(i, ns)| {
+        let visible = self.visible();
+        let rows = visible.iter().enumerate().map(|(i, ns)| {
             let name = ns.clone().unwrap_or_else(|| "all".into());
             Row::new(vec![Span::raw(name)]).style(if i == self.selected {
                 Style::new().bg(th.colors.bg_active)
@@ -126,8 +163,8 @@ impl View for NamespacesView {
                         Style::new().fg(th.colors.accent),
                     ))),
             );
-        f.render_widget(table, area);
-        if self.namespaces.len() <= 1 {
+        self.scroll.render(f, area, table, Some(self.selected));
+        if !self.loaded && self.namespaces.len() <= 1 {
             let loading = Paragraph::new(self.error.as_deref().unwrap_or("loading…"))
                 .style(Style::new().fg(th.colors.fg_dim));
             f.render_widget(loading, area);

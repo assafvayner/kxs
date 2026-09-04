@@ -1,6 +1,6 @@
 //! Metrics view: node utilization bars on top, pods sorted by CPU below.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -20,15 +20,27 @@ pub struct MetricsView {
     pods: Result<Vec<MetricsRow>, String>,
     nodes: Result<Vec<NodeMetricsRow>, String>,
     selected: usize,
+    /// Poll interval, kept so `ctrl-r` can restart the poller with it.
+    interval: std::time::Duration,
+    nodes_scroll: crate::table::Scroll,
+    pods_scroll: crate::table::Scroll,
 }
 
 impl MetricsView {
     pub fn new(app: &mut crate::app::App) -> Self {
+        let secs = app
+            .config
+            .lock()
+            .map(|c| c.metrics_interval_secs)
+            .unwrap_or(15);
         MetricsView {
             id: app.alloc_id(),
             pods: Ok(vec![]),
             nodes: Ok(vec![]),
             selected: 0,
+            interval: std::time::Duration::from_secs(secs),
+            nodes_scroll: Default::default(),
+            pods_scroll: Default::default(),
         }
     }
 
@@ -57,13 +69,23 @@ impl View for MetricsView {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        vec![Hint::action("r", "refresh")]
+        vec![Hint::action("ctrl-r", "refresh")]
     }
 
     fn handle_key(&mut self, key: KeyEvent, _ctx: &AppCtx) -> Vec<Cmd> {
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => self.selected = self.selected.saturating_add(1),
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
+            KeyCode::PageDown => self.selected = self.selected.saturating_add(10),
+            KeyCode::PageUp => self.selected = self.selected.saturating_sub(10),
+            KeyCode::Home | KeyCode::Char('g') => self.selected = 0,
+            // restarting the poller ticks immediately, so this is a refresh
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return vec![Cmd::PollMetrics {
+                    view: self.id,
+                    every: self.interval,
+                }];
+            }
             _ => {}
         }
         vec![]
@@ -130,24 +152,22 @@ impl View for MetricsView {
                         Span::styled(mem.text.clone(), Self::color_for(mem.cls, th)),
                     ])
                 });
-                f.render_widget(
-                    Table::new(
-                        rows,
-                        [
-                            Constraint::Percentage(25),
-                            Constraint::Length(12),
-                            Constraint::Percentage(20),
-                            Constraint::Length(12),
-                            Constraint::Percentage(20),
-                        ],
-                    )
-                    .header(
-                        Row::new(["NAME", "CPU", "CPU%", "MEM", "MEM%"])
-                            .style(Style::new().fg(th.colors.fg_dim).bold()),
-                    )
-                    .block(nodes_block),
-                    nodes_area,
-                );
+                let table = Table::new(
+                    rows,
+                    [
+                        Constraint::Percentage(25),
+                        Constraint::Length(12),
+                        Constraint::Percentage(20),
+                        Constraint::Length(12),
+                        Constraint::Percentage(20),
+                    ],
+                )
+                .header(
+                    Row::new(["NAME", "CPU", "CPU%", "MEM", "MEM%"])
+                        .style(Style::new().fg(th.colors.fg_dim).bold()),
+                )
+                .block(nodes_block);
+                self.nodes_scroll.render(f, nodes_area, table, None);
             }
         }
 
@@ -155,39 +175,41 @@ impl View for MetricsView {
             Err(_) | Ok(_) => {
                 let mut pods = self.pods.as_ref().unwrap_or(&vec![]).clone();
                 pods.sort_by_key(|p| std::cmp::Reverse(p.cpu_millicores));
-                let rows = pods
-                    .iter()
-                    .take(pods_area.height.saturating_sub(3) as usize)
-                    .map(|p| {
-                        let cpu = cpu_util(Some(p.cpu_millicores), None);
-                        let mem = mem_util(Some(p.mem_mib), None);
-                        Row::new(vec![
-                            Span::styled(
-                                p.namespace.clone().unwrap_or_default(),
-                                Style::new().fg(th.colors.fg_dim),
-                            ),
-                            Span::styled(p.name.clone(), Style::new().fg(th.colors.fg)),
-                            Span::styled(cpu.text.clone(), Self::color_for(cpu.cls, th)),
-                            Span::styled(mem.text.clone(), Self::color_for(mem.cls, th)),
-                        ])
-                    });
-                f.render_widget(
-                    Table::new(
-                        rows,
-                        [
-                            Constraint::Percentage(20),
-                            Constraint::Percentage(40),
-                            Constraint::Percentage(20),
-                            Constraint::Percentage(20),
-                        ],
-                    )
-                    .header(
-                        Row::new(["NAMESPACE", "NAME", "CPU", "MEM"])
-                            .style(Style::new().fg(th.colors.fg_dim).bold()),
-                    )
-                    .block(pods_block),
-                    pods_area,
-                );
+                let selected = self.selected.min(pods.len().saturating_sub(1));
+                let rows = pods.iter().enumerate().map(|(i, p)| {
+                    let cpu = cpu_util(Some(p.cpu_millicores), None);
+                    let mem = mem_util(Some(p.mem_mib), None);
+                    Row::new(vec![
+                        Span::styled(
+                            p.namespace.clone().unwrap_or_default(),
+                            Style::new().fg(th.colors.fg_dim),
+                        ),
+                        Span::styled(p.name.clone(), Style::new().fg(th.colors.fg)),
+                        Span::styled(cpu.text.clone(), Self::color_for(cpu.cls, th)),
+                        Span::styled(mem.text.clone(), Self::color_for(mem.cls, th)),
+                    ])
+                    .style(if i == selected {
+                        Style::new().bg(th.colors.bg_active)
+                    } else {
+                        Style::new()
+                    })
+                });
+                let table = Table::new(
+                    rows,
+                    [
+                        Constraint::Percentage(20),
+                        Constraint::Percentage(40),
+                        Constraint::Percentage(20),
+                        Constraint::Percentage(20),
+                    ],
+                )
+                .header(
+                    Row::new(["NAMESPACE", "NAME", "CPU", "MEM"])
+                        .style(Style::new().fg(th.colors.fg_dim).bold()),
+                )
+                .block(pods_block);
+                let sel = (!pods.is_empty()).then_some(selected);
+                self.pods_scroll.render(f, pods_area, table, sel);
             }
         }
     }

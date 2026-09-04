@@ -126,6 +126,13 @@ impl View for ThemePicker {
             }
             lines.push(Line::from(spans));
         }
-        f.render_widget(Paragraph::new(lines).block(block), area);
+        let rows = area.height.saturating_sub(2) as usize;
+        let offset = self.selected.saturating_sub(rows.saturating_sub(1));
+        f.render_widget(
+            Paragraph::new(lines)
+                .scroll((offset as u16, 0))
+                .block(block),
+            area,
+        );
     }
 }

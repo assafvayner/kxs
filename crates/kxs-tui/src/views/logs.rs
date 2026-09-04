@@ -42,6 +42,7 @@ pub struct LogsView {
     /// Pod name per line (multi-pod mode), parallel to `lines`.
     prefixes: VecDeque<Option<String>>,
     autoscroll: bool,
+    fullscreen: bool,
     wrap: bool,
     timestamps: bool,
     previous: bool,
@@ -69,6 +70,7 @@ impl LogsView {
             lines: VecDeque::new(),
             prefixes: VecDeque::new(),
             autoscroll: true,
+            fullscreen: false,
             wrap: true,
             timestamps: false,
             previous: false,
@@ -80,6 +82,12 @@ impl LogsView {
     }
 
     /// Logs for a known container (`l` on a Containers row).
+    /// Opens straight onto the previous container's logs (`p` from a table).
+    pub fn previous(mut self) -> Self {
+        self.previous = true;
+        self
+    }
+
     pub fn new_with_container(app: &mut crate::app::App, target: Target) -> Self {
         let mut v = Self::new(app, target.clone(), false);
         v.targets[0].container = target.container.clone();
@@ -174,6 +182,11 @@ impl View for LogsView {
         self.id
     }
 
+    fn toggle_fullscreen(&mut self) -> Option<bool> {
+        self.fullscreen = !self.fullscreen;
+        Some(self.fullscreen)
+    }
+
     fn title(&self) -> String {
         let what = if self.multi() {
             format!("{} pods", self.targets.len())
@@ -190,6 +203,9 @@ impl View for LogsView {
             if self.wrap { "on" } else { "off" },
             if self.timestamps { "on" } else { "off" }
         ));
+        if self.previous {
+            title.push_str(" prev");
+        }
         if let Some(s) = &self.status {
             title.push_str(&format!("  {s}"));
         }
@@ -203,6 +219,7 @@ impl View for LogsView {
     fn hints(&self) -> Vec<Hint> {
         vec![
             Hint::action("s", "autoscroll"),
+            Hint::action("f", "fullscreen"),
             Hint::action("w", "wrap"),
             Hint::action("t", "timestamps"),
             Hint::action("c", "clear"),

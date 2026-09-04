@@ -44,8 +44,17 @@ pub struct PodsView {
     selector: Option<String>,
     /// Waiting for `Fetch::WorkloadSelector` before starting the watch.
     selector_pending: bool,
-    /// `/` free-text filter on the pod name.
+    /// `/` filter text as typed; `-l` selectors are split out into
+    /// `filter_selector` and handed to the watch.
     filter: String,
+    /// Label selector from a `-l` filter, ANDed with `selector`.
+    filter_selector: Option<String>,
+    /// Name half of the filter, matched locally.
+    name_filter: String,
+    /// `ctrl-z`: show only pods that are not healthy.
+    faults_only: bool,
+    /// `ctrl-w`: keep the wide columns (IP/NODE) even when narrow.
+    wide: bool,
     rows: Vec<PodRow>,
     /// key → latest metrics
     metrics: HashMap<String, MetricsRow>,
@@ -55,12 +64,15 @@ pub struct PodsView {
     pending: bool,
     /// Awaiting container resolution for exec / port-forward.
     pending_exec: bool,
+    /// Awaiting container resolution for `a` attach.
+    pending_attach: bool,
     pending_pf: bool,
     pf_ns_pod: (String, String),
     /// Pod keys ("ns/name") with a live forward, for the PF column.
     forwarded: std::collections::HashSet<String>,
     status: Option<String>,
     viewport_rows: Cell<u16>,
+    scroll: crate::table::Scroll,
 }
 
 /// The Pod ResourceKind, resolved from discovery when available.
@@ -87,6 +99,10 @@ impl PodsView {
             selector: None,
             selector_pending: false,
             filter: String::new(),
+            filter_selector: None,
+            name_filter: String::new(),
+            faults_only: false,
+            wide: false,
             rows: vec![],
             metrics: HashMap::new(),
             sort: None,
@@ -94,11 +110,13 @@ impl PodsView {
             handle: None,
             pending: false,
             pending_exec: false,
+            pending_attach: false,
             pending_pf: false,
             pf_ns_pod: (String::new(), String::new()),
             forwarded: Default::default(),
             status: None,
             viewport_rows: Cell::new(20),
+            scroll: Default::default(),
         }
     }
 
@@ -113,12 +131,17 @@ impl PodsView {
         self.visible_rows().iter().map(|r| r.key.clone()).collect()
     }
 
+    fn selected_index(&self) -> Option<usize> {
+        let sel = self.selected.as_deref()?;
+        self.visible_rows().iter().position(|r| r.key == sel)
+    }
+
     fn restart_watch(&mut self) -> Cmd {
         self.pending = true;
         Cmd::StartPodWatch {
             view: self.id,
             ns: self.watched_ns.clone(),
-            selector: self.selector.clone(),
+            selector: join_selectors(self.selector.as_deref(), self.filter_selector.as_deref()),
         }
     }
 
@@ -203,7 +226,7 @@ impl PodsView {
         }
         let overhead = |n: usize| 2u16 + (n as u16).saturating_sub(1);
         let age_idx = widths.len() - 1;
-        while widths.len() > 2 {
+        while !self.wide && widths.len() > 2 {
             let n = widths.len();
             let needed: u16 = widths.iter().sum::<u16>() + overhead(n);
             if needed <= total {
@@ -227,16 +250,14 @@ impl PodsView {
     }
 
     fn visible_rows(&self) -> Vec<PodRow> {
-        let base: Vec<PodRow> = if self.filter.is_empty() {
-            self.rows.clone()
-        } else {
-            let needle = self.filter.to_lowercase();
-            self.rows
-                .iter()
-                .filter(|p| p.name.to_lowercase().contains(&needle))
-                .cloned()
-                .collect()
-        };
+        let pred = kxs_cluster::table::filter_predicate(&self.name_filter);
+        let base: Vec<PodRow> = self
+            .rows
+            .iter()
+            .filter(|p| pred(&p.name))
+            .filter(|p| !self.faults_only || is_faulty(p))
+            .cloned()
+            .collect();
         let Some((col, dir)) = self.sort else {
             return base;
         };
@@ -382,12 +403,6 @@ impl View for PodsView {
                 self.selected = move_selection(&keys, self.selected.as_deref(), -page);
                 vec![]
             }
-            KeyCode::Char('c') => {
-                if let Some(sel) = &self.selected {
-                    crate::clipboard::copy(sel);
-                }
-                vec![]
-            }
             KeyCode::Char(c) if c.is_ascii_uppercase() => {
                 let Some(field) = self.sort_key_for(c) else {
                     return vec![];
@@ -478,6 +493,42 @@ impl View for PodsView {
                 vec![]
             }
             crate::msg::Msg::Fetched {
+                result: Ok(crate::cmd::FetchResult::AttachContainers { ns, pod, infos }),
+                ..
+            } => {
+                self.pf_ns_pod = (ns.clone(), pod.clone());
+                self.pending_attach = false;
+                let attachable: Vec<kxs_cluster::pods::ContainerInfo> = infos
+                    .iter()
+                    .filter(|c| !c.init_container)
+                    .cloned()
+                    .collect();
+                match attachable.len() {
+                    0 => {
+                        self.status = Some("no attachable containers".into());
+                        vec![]
+                    }
+                    1 => vec![Cmd::Suspend(crate::cmd::SuspendAction::Attach {
+                        ns: self.pf_ns_pod.0.clone(),
+                        pod: self.pf_ns_pod.1.clone(),
+                        container: Some(attachable[0].name.clone()),
+                    })],
+                    _ => {
+                        let options = attachable
+                            .iter()
+                            .map(|c| (c.name.clone(), c.image.clone()))
+                            .collect();
+                        self.pending_attach = true;
+                        vec![Cmd::PickExec {
+                            view: self.id,
+                            ns: self.pf_ns_pod.0.clone(),
+                            pod: self.pf_ns_pod.1.clone(),
+                            options,
+                        }]
+                    }
+                }
+            }
+            crate::msg::Msg::Fetched {
                 result: Ok(crate::cmd::FetchResult::ExecContainers { ns, pod, infos }),
                 ..
             } => {
@@ -557,10 +608,18 @@ impl View for PodsView {
             crate::msg::Msg::Picked { choice, .. } => {
                 let Some(choice) = choice else {
                     self.pending_exec = false;
+                    self.pending_attach = false;
                     self.pending_pf = false;
                     return vec![];
                 };
-                if self.pending_exec {
+                if self.pending_attach {
+                    self.pending_attach = false;
+                    vec![Cmd::Suspend(crate::cmd::SuspendAction::Attach {
+                        ns: self.pf_ns_pod.0.clone(),
+                        pod: self.pf_ns_pod.1.clone(),
+                        container: Some(choice.clone()),
+                    })]
+                } else if self.pending_exec {
                     self.pending_exec = false;
                     vec![Cmd::Suspend(crate::cmd::SuspendAction::Exec {
                         ns: self.pf_ns_pod.0.clone(),
@@ -600,6 +659,10 @@ impl View for PodsView {
 
     fn set_filter(&mut self, filter: &str) -> Vec<Cmd> {
         self.filter = filter.to_string();
+        let (labels, name) = kxs_cluster::table::split_filter(filter);
+        let selector_changed = labels != self.filter_selector;
+        self.filter_selector = labels;
+        self.name_filter = name;
         // keep the selection if it survives the filter, else take the first visible
         let keys = self.keys();
         if !keys
@@ -607,6 +670,12 @@ impl View for PodsView {
             .any(|k| Some(k.as_str()) == self.selected.as_deref())
         {
             self.selected = keys.first().cloned();
+        }
+        if selector_changed {
+            let mut cmds = self.stop_old();
+            cmds.push(self.restart_watch());
+            self.rows.clear();
+            return cmds;
         }
         vec![]
     }
@@ -623,6 +692,23 @@ impl View for PodsView {
         true
     }
 
+    fn toggle_wide(&mut self) -> Option<bool> {
+        self.wide = !self.wide;
+        Some(self.wide)
+    }
+
+    fn toggle_faults(&mut self) -> Option<bool> {
+        self.faults_only = !self.faults_only;
+        let keys = self.keys();
+        if !keys
+            .iter()
+            .any(|k| Some(k.as_str()) == self.selected.as_deref())
+        {
+            self.selected = keys.first().cloned();
+        }
+        Some(self.faults_only)
+    }
+
     fn target(&self) -> Option<Target> {
         let row = self
             .rows
@@ -635,6 +721,7 @@ impl View for PodsView {
             container: None,
             desired_replicas: None,
             suspend: None,
+            unschedulable: None,
         })
     }
 
@@ -706,12 +793,10 @@ impl View for PodsView {
             })
         });
         let constraints: Vec<Constraint> = widths.iter().map(|w| Constraint::Length(*w)).collect();
-        f.render_widget(
-            Table::new(rows, constraints)
-                .header(Row::new(header_cells))
-                .block(block),
-            area,
-        );
+        let table = Table::new(rows, constraints)
+            .header(Row::new(header_cells))
+            .block(block);
+        self.scroll.render(f, area, table, self.selected_index());
     }
 }
 
@@ -765,5 +850,34 @@ fn pod_kind_from(_row: &PodRow) -> ResourceKind {
         plural: "pods".into(),
         namespaced: true,
         aliases: vec!["po".into()],
+    }
+}
+
+/// ANDs a drill-down selector with a `-l` filter selector.
+fn join_selectors(a: Option<&str>, b: Option<&str>) -> Option<String> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(format!("{a},{b}")),
+        (Some(a), None) => Some(a.to_string()),
+        (None, Some(b)) => Some(b.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// `ctrl-z` predicate: anything a human would want to look at.
+fn is_faulty(p: &PodRow) -> bool {
+    if p.restarts > 0 {
+        return true;
+    }
+    match p.status.as_str() {
+        "Running" | "Succeeded" | "Completed" => !ready_matches(p),
+        _ => true,
+    }
+}
+
+/// "2/2" — all containers up.
+fn ready_matches(p: &PodRow) -> bool {
+    match p.ready.split_once('/') {
+        Some((a, b)) => a == b,
+        None => true,
     }
 }

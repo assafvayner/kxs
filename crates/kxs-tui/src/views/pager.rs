@@ -25,9 +25,16 @@ pub struct Pager {
     viewport: Cell<u16>,
     search: Option<String>,
     match_lines: Vec<usize>,
+    fullscreen: bool,
 }
 
 impl Pager {
+    /// `f`: hand the whole frame to the text.
+    pub fn toggle_fullscreen(&mut self) -> bool {
+        self.fullscreen = !self.fullscreen;
+        self.fullscreen
+    }
+
     pub fn new(app: &mut crate::app::App, kind_label: String, text: &str) -> Self {
         Pager {
             id: app.alloc_id(),
@@ -38,6 +45,7 @@ impl Pager {
             viewport: Cell::new(20),
             search: None,
             match_lines: vec![],
+            fullscreen: false,
         }
     }
 
@@ -159,6 +167,7 @@ impl View for Pager {
             Hint::action("/", "search"),
             Hint::action("n/N", "next/prev match"),
             Hint::action("c", "copy"),
+            Hint::action("f", "fullscreen"),
         ]
     }
 

@@ -18,6 +18,32 @@ use crate::sessions::Shared;
 use crate::theme::Theme;
 use crate::view::{View, ViewId};
 
+/// Lowercased plural of an owner's Kind, for `resolve_kind`. Discovery
+/// matches on `kind`, `plural` or an alias, so the naive plural is enough for
+/// the built-in owners (ReplicaSet → replicasets, Job → jobs).
+fn plural_of(kind: &str) -> String {
+    let lower = kind.to_lowercase();
+    if lower.ends_with('s') {
+        lower
+    } else {
+        format!("{lower}s")
+    }
+}
+
+/// Everything after the command head, as owned words.
+fn parts_of(text: &str) -> Vec<String> {
+    text.split_whitespace().skip(1).map(String::from).collect()
+}
+
+/// "on"/"off" for the toggle flashes.
+fn on_off(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
+}
+
 pub struct App {
     pub views: Vec<Box<dyn View>>,
     pub chrome: Chrome,
@@ -27,6 +53,11 @@ pub struct App {
     next_view_id: ViewId,
     /// One metrics-error flash per session ("missing metrics-server").
     metrics_error_flashed: bool,
+    /// `:` commands, oldest first; `[`/`]` walk it and `-` repeats the
+    /// previous one (k9s' command history).
+    history: Vec<String>,
+    /// Cursor into `history`; `len()` means "past the newest entry".
+    history_pos: usize,
 }
 
 impl App {
@@ -43,6 +74,8 @@ impl App {
             theme,
             next_view_id: 1,
             metrics_error_flashed: false,
+            history: Vec::new(),
+            history_pos: 0,
         }
     }
 
@@ -53,6 +86,7 @@ impl App {
     }
 
     pub fn push_view(&mut self, mut view: Box<dyn View>) -> Vec<Cmd> {
+        self.chrome.fullscreen = false;
         // a freshly pushed view may need to start its watch right away
         let cmds = view.on_msg(&Msg::Tick, &self.ctx());
         self.views.push(view);
@@ -74,6 +108,7 @@ impl App {
         if self.views.len() <= 1 {
             return vec![];
         }
+        self.chrome.fullscreen = false;
         let mut view = self.views.pop().expect("len > 1");
         let cmds = view.on_pop();
         self.sync_chrome();
@@ -235,6 +270,10 @@ impl App {
     pub fn update(&mut self, msg: Msg) -> Vec<Cmd> {
         match msg {
             Msg::Key(k) => self.handle_key(k),
+            Msg::Flash { text, error } => {
+                self.chrome.flash(text, error);
+                vec![]
+            }
             Msg::Resize(w, h) => {
                 self.chrome.size = (w, h);
                 vec![]
@@ -329,6 +368,23 @@ impl App {
                 }
                 if let Err(text) = &result {
                     self.chrome.flash(text.clone(), true);
+                }
+                // jump-to-owner is resolved by the app, not the view that asked
+                if let Ok(crate::cmd::FetchResult::Owner(owner)) = &result {
+                    return match owner.clone() {
+                        Some((kind, name)) => {
+                            let ns = self
+                                .views
+                                .last()
+                                .and_then(|v| v.target())
+                                .and_then(|t| t.ns);
+                            self.open_kind_filtered(&plural_of(&kind), ns, &name)
+                        }
+                        None => {
+                            self.chrome.flash("no owner reference", false);
+                            vec![]
+                        }
+                    };
                 }
                 self.route(view, &Msg::Fetched { view, result })
             }
@@ -597,6 +653,52 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 return self.quit_cmds();
             }
+            // `f` is fullscreen in the pager/log views, port-forwards elsewhere
+            KeyCode::Char('f') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(on) = self.top_view().and_then(|v| v.toggle_fullscreen()) {
+                    self.chrome.fullscreen = on;
+                    return vec![];
+                }
+            }
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let view = Box::new(crate::views::aliases::AliasesView::new(self));
+                return self.push_view(view);
+            }
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.chrome.show_header = !self.chrome.show_header;
+                return vec![];
+            }
+            KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.chrome.show_crumbs = !self.chrome.show_crumbs;
+                return vec![];
+            }
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let state = self.top_view().and_then(|v| v.toggle_wide());
+                match state {
+                    Some(on) => self
+                        .chrome
+                        .flash(format!("wide columns {}", on_off(on)), false),
+                    None => self.chrome.flash("no wide columns here", false),
+                }
+                return vec![];
+            }
+            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let state = self.top_view().and_then(|v| v.toggle_faults());
+                match state {
+                    Some(on) => self
+                        .chrome
+                        .flash(format!("faults only {}", on_off(on)), false),
+                    None => self.chrome.flash("no fault filter here", false),
+                }
+                return vec![];
+            }
+            // k9s repeats the previous command with `-` and walks the
+            // history with `[` / `]`
+            KeyCode::Char('-') if !self.top_view().is_some_and(|v| v.handles_digits()) => {
+                return self.history_repeat();
+            }
+            KeyCode::Char('[') => return self.history_step(-1),
+            KeyCode::Char(']') => return self.history_step(1),
             KeyCode::Esc => {
                 return self.esc_cascade();
             }
@@ -608,28 +710,42 @@ impl App {
             _ => {}
         }
         // 3. resource actions handled at app level (need the target + stack push)
-        let ctrl_d =
-            key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL);
-        if matches!(
-            key.code,
-            KeyCode::Char('d')
-                | KeyCode::Char('y')
-                | KeyCode::Char('l')
-                | KeyCode::Char('L')
-                | KeyCode::Enter
-                | KeyCode::Char('e')
-                | KeyCode::Char('s')
-                | KeyCode::Char('r')
-                | KeyCode::Char('c')
-                | KeyCode::Char('u')
-                | KeyCode::Char('t')
-                | KeyCode::Char('S')
-                | KeyCode::Char('h')
-                | KeyCode::Char('x')
-                | KeyCode::Char('F')
-                | KeyCode::Char('f')
-        ) || ctrl_d
-        {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let ctrl_d = ctrl && key.code == KeyCode::Char('d');
+        // unmodified keys that act on the selected row
+        let plain_action = !ctrl
+            && matches!(
+                key.code,
+                KeyCode::Char('d')
+                    | KeyCode::Char('y')
+                    | KeyCode::Char('l')
+                    | KeyCode::Char('L')
+                    | KeyCode::Char('p')
+                    | KeyCode::Enter
+                    | KeyCode::Char('e')
+                    | KeyCode::Char('s')
+                    | KeyCode::Char('a')
+                    | KeyCode::Char('n')
+                    | KeyCode::Char('w')
+                    | KeyCode::Char('z')
+                    | KeyCode::Char('J')
+                    | KeyCode::Char('r')
+                    | KeyCode::Char('c')
+                    | KeyCode::Char('u')
+                    | KeyCode::Char('t')
+                    | KeyCode::Char('h')
+                    | KeyCode::Char('x')
+                    | KeyCode::Char('F')
+                    | KeyCode::Char('f')
+            );
+        // ctrl-r (refresh) and the other ctrl keys belong to the view or the
+        // globals above, never to a row action
+        let ctrl_action = ctrl
+            && matches!(
+                key.code,
+                KeyCode::Char('d') | KeyCode::Char('k') | KeyCode::Char('s')
+            );
+        if plain_action || ctrl_action {
             let enter_wanted = self.views.last().is_some_and(|v| v.wants_enter());
             let target = self.views.last().and_then(|v| v.target());
             if let Some(t) = target {
@@ -637,8 +753,18 @@ impl App {
                     KeyCode::Enter if !enter_wanted => {}
                     KeyCode::Char('d') if !ctrl_d => return self.open_text_view(&t, true),
                     KeyCode::Char('y') => return self.open_text_view(&t, false),
-                    KeyCode::Char('l') => return self.open_logs(&t, false),
-                    KeyCode::Char('L') => return self.open_logs(&t, true),
+                    KeyCode::Char('l') => return self.open_logs(&t, false, false),
+                    KeyCode::Char('L') => return self.open_logs(&t, true, false),
+                    KeyCode::Char('p') => return self.open_logs(&t, false, true),
+                    KeyCode::Char('c') if !ctrl => return self.copy_name(&t),
+                    KeyCode::Char('n') => return self.copy_namespace(&t),
+                    KeyCode::Char('w') => return self.warp_to_namespace(&t),
+                    KeyCode::Char('J') => return self.jump_to_owner(&t),
+                    KeyCode::Char('z') if t.kind.kind == "Deployment" => {
+                        return self.open_replicasets(&t);
+                    }
+                    KeyCode::Char('s') if ctrl => return self.save_resource(&t),
+                    KeyCode::Char('a') if t.kind.kind == "Pod" => return self.begin_attach(&t),
                     KeyCode::Enter => return self.open_enter(&t),
                     KeyCode::Char('x')
                         if matches!(t.kind.kind.as_str(), "ConfigMap" | "Secret") =>
@@ -762,7 +888,10 @@ impl App {
                 let kind = self.chrome.prompt.as_ref().map(|p| p.kind);
                 self.chrome.close_prompt();
                 match kind {
-                    Some(PromptKind::Command) => self.handle_command(&text),
+                    Some(PromptKind::Command) => {
+                        self.remember_command(text.trim());
+                        self.handle_command(&text)
+                    }
                     Some(PromptKind::Filter) => {
                         if let Some(v) = self.top_view() {
                             v.set_filter(&text);
@@ -775,7 +904,8 @@ impl App {
         }
     }
 
-    /// `:` command parsing (Phase 2 subset of the spec's command table).
+    /// `:` command parsing. Aliases and argument forms follow k9s:
+    /// `<kind> [ns]`, `<kind> /filter`, `<kind> label=value`, `<kind> @context`.
     fn handle_command(&mut self, text: &str) -> Vec<Cmd> {
         let text = text.trim();
         if text.is_empty() {
@@ -786,7 +916,7 @@ impl App {
         let arg = parts.next();
         match head {
             "q" | "quit" => self.quit_cmds(),
-            "ctx" => match arg {
+            "ctx" | "context" | "contexts" => match arg {
                 Some(name) => vec![Cmd::Connect {
                     context: name.to_string(),
                 }],
@@ -795,7 +925,7 @@ impl App {
                     self.push_view(view)
                 }
             },
-            "ns" => match arg {
+            "ns" | "namespace" | "namespaces" => match arg {
                 Some(ns) => {
                     self.set_namespace(Some(ns.to_string()));
                     vec![]
@@ -805,7 +935,15 @@ impl App {
                     self.push_view(view)
                 }
             },
-            "help" => {
+            "alias" | "aliases" => {
+                let view = Box::new(crate::views::aliases::AliasesView::new(self));
+                self.push_view(view)
+            }
+            "pf" | "portforward" | "portforwards" => {
+                let view = Box::new(crate::views::forwards::ForwardsView::new(self));
+                self.push_view(view)
+            }
+            "help" | "h" | "?" => {
                 let view = Box::new(crate::views::help::HelpView::new(self));
                 self.push_view(view)
             }
@@ -824,41 +962,66 @@ impl App {
                 let view = Box::new(crate::views::events::EventsView::new(self, ns));
                 self.replace_views(vec![view])
             }
-            "metrics" | "top" => {
+            "metrics" | "top" | "pulses" | "pu" => {
                 let view = Box::new(crate::views::metrics::MetricsView::new(self));
                 self.replace_views(vec![view])
             }
-            _ => {
-                // `<kind|alias> [namespace]` — replace the stack
-                let ns = arg.map(String::from);
-                if ns.is_some() {
-                    self.set_namespace(ns.clone());
-                }
-                let kinds = self.ctx().kinds;
-                match kxs_cluster::command::resolve_kind(&kinds, head) {
-                    Some(kind) if kind.kind == "Pod" && kind.group.is_empty() => {
-                        let view = Box::new(crate::views::pods::PodsView::new(
-                            self,
-                            self.ctx().namespace,
-                        ));
-                        self.replace_views(vec![view])
-                    }
-                    Some(_) => match crate::views::resources::open(self, head, None) {
-                        Some(view) => self.replace_views(vec![view]),
-                        None => {
-                            self.chrome
-                                .flash(format!("unknown command or kind: {head}"), true);
-                            vec![]
-                        }
-                    },
-                    None => {
-                        self.chrome
-                            .flash(format!("unknown command or kind: {head}"), true);
-                        vec![]
-                    }
-                }
+            _ => self.open_kind_command(head, parts_of(text)),
+        }
+    }
+
+    /// `<kind|alias> [arg]` where `arg` is a namespace, `/filter`,
+    /// `label=value` selector, or `@context`.
+    fn open_kind_command(&mut self, head: &str, args: Vec<String>) -> Vec<Cmd> {
+        let mut ns: Option<String> = None;
+        let mut filter: Option<String> = None;
+        let mut context: Option<String> = None;
+        for arg in args {
+            if let Some(rest) = arg.strip_prefix('@') {
+                context = Some(rest.to_string());
+            } else if let Some(rest) = arg.strip_prefix('/') {
+                filter = Some(rest.to_string());
+            } else if arg.contains('=') {
+                filter = Some(format!("-l {arg}"));
+            } else {
+                ns = Some(arg);
             }
         }
+        // `@ctx` switches the session first; the kind is resolved against the
+        // new cluster's discovery once it is connected
+        if let Some(context) = context {
+            return vec![Cmd::Connect { context }];
+        }
+        let kinds = self.ctx().kinds;
+        if kxs_cluster::command::resolve_kind(&kinds, head).is_none() {
+            self.chrome
+                .flash(format!("unknown command or kind: {head}"), true);
+            return vec![];
+        }
+        if ns.is_some() {
+            self.set_namespace(ns);
+        }
+        let kinds = self.ctx().kinds;
+        let view: Box<dyn View> = match kxs_cluster::command::resolve_kind(&kinds, head) {
+            Some(kind) if kind.kind == "Pod" && kind.group.is_empty() => Box::new(
+                crate::views::pods::PodsView::new(self, self.ctx().namespace),
+            ),
+            _ => match crate::views::resources::open(self, head, None) {
+                Some(view) => view,
+                None => {
+                    self.chrome
+                        .flash(format!("unknown command or kind: {head}"), true);
+                    return vec![];
+                }
+            },
+        };
+        let mut cmds = self.replace_views(vec![view]);
+        if let Some(filter) = filter {
+            if let Some(v) = self.views.last_mut() {
+                cmds.extend(v.set_filter(&filter));
+            }
+        }
+        cmds
     }
 
     /// shift-f on a Pod: resolve its container ports, then open the forward
@@ -997,23 +1160,10 @@ impl App {
                 }
                 Some(vec![])
             }
-            (KeyCode::Char('c'), _, "Node") => {
-                if let Some(out) = refuse(self, "cordon") {
-                    return Some(out);
-                }
-                view.map(|view| {
-                    vec![Cmd::Mutate {
-                        view,
-                        m: crate::cmd::Mutation::Cordon {
-                            ns: t.ns.clone().unwrap_or_default(),
-                            name: t.name.clone(),
-                            unschedulable: true,
-                        },
-                    }]
-                })
-            }
+            // k9s toggles cordon with `u`; `c` is reserved for copy-name
             (KeyCode::Char('u'), _, "Node") => {
-                if let Some(out) = refuse(self, "uncordon") {
+                let cordoned = t.unschedulable.unwrap_or(false);
+                if let Some(out) = refuse(self, if cordoned { "uncordon" } else { "cordon" }) {
                     return Some(out);
                 }
                 view.map(|view| {
@@ -1022,7 +1172,7 @@ impl App {
                         m: crate::cmd::Mutation::Cordon {
                             ns: t.ns.clone().unwrap_or_default(),
                             name: t.name.clone(),
-                            unschedulable: false,
+                            unschedulable: !cordoned,
                         },
                     }]
                 })
@@ -1044,7 +1194,7 @@ impl App {
                 }
                 Some(vec![])
             }
-            (KeyCode::Char('S'), _, "CronJob") => {
+            (KeyCode::Char('s'), _, "CronJob") => {
                 if let Some(out) = refuse(self, "suspend toggle") {
                     return Some(out);
                 }
@@ -1078,21 +1228,19 @@ impl App {
                 if let Some(out) = refuse(self, "force delete") {
                     return Some(out);
                 }
-                if let Some(view) = view {
-                    self.chrome.open_confirm(
-                        format!("Force delete {} {}?", t.kind.kind, t.name),
-                        "Grace period 0 (force); propagation Background".into(),
+                // k9s' ctrl-k kills outright: no dialog, grace period 0
+                view.map(|view| {
+                    vec![Cmd::Mutate {
                         view,
-                        crate::cmd::Mutation::Delete {
+                        m: crate::cmd::Mutation::Delete {
                             kind: t.kind.clone(),
                             ns: t.ns.clone().unwrap_or_default(),
                             name: t.name.clone(),
                             propagation: Some("Background".into()),
                             force: true,
                         },
-                    );
-                }
-                Some(vec![])
+                    }]
+                })
             }
             _ => None,
         }
@@ -1100,20 +1248,25 @@ impl App {
 
     /// `l` on a Pod (logs, with container picker when several) or on a pod
     /// owner (all pods of the workload).
-    fn open_logs(&mut self, target: &crate::view::Target, all_containers: bool) -> Vec<Cmd> {
+    fn open_logs(
+        &mut self,
+        target: &crate::view::Target,
+        all_containers: bool,
+        previous: bool,
+    ) -> Vec<Cmd> {
         let is_pod = target.kind.kind == "Pod";
         let view: Box<dyn View> = if is_pod {
-            if let Some(container) = &target.container {
+            let v = if let Some(container) = &target.container {
                 let mut t = target.clone();
                 t.container = Some(container.clone());
-                Box::new(crate::views::logs::LogsView::new_with_container(self, t))
+                crate::views::logs::LogsView::new_with_container(self, t)
             } else {
-                Box::new(crate::views::logs::LogsView::new(
-                    self,
-                    target.clone(),
-                    all_containers,
-                ))
-            }
+                crate::views::logs::LogsView::new(self, target.clone(), all_containers)
+            };
+            Box::new(if previous { v.previous() } else { v })
+        } else if previous {
+            self.chrome.flash("previous logs are pod-only", false);
+            return vec![];
         } else if kxs_cluster::kinds::is_pod_owner(&target.kind.kind) {
             Box::new(crate::views::logs::LogsView::new_workload(
                 self,
@@ -1170,6 +1323,150 @@ impl App {
         vec![]
     }
 
+    /// `c`: copy the selected resource's name.
+    fn copy_name(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
+        crate::clipboard::copy(&t.name);
+        self.chrome.flash(format!("copied {}", t.name), false);
+        vec![]
+    }
+
+    /// `n`: copy the selected resource's namespace.
+    fn copy_namespace(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
+        match &t.ns {
+            Some(ns) => {
+                crate::clipboard::copy(ns);
+                self.chrome.flash(format!("copied {ns}"), false);
+            }
+            None => self.chrome.flash("row has no namespace", false),
+        }
+        vec![]
+    }
+
+    /// `w`: make the selected row's namespace the active one.
+    fn warp_to_namespace(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
+        match &t.ns {
+            Some(ns) => {
+                let ns = ns.clone();
+                self.set_namespace(Some(ns.clone()));
+                self.chrome.flash(format!("namespace {ns}"), false);
+            }
+            None => self.chrome.flash("row has no namespace", false),
+        }
+        vec![]
+    }
+
+    /// `ctrl-s`: dump the selected resource's YAML to a file.
+    fn save_resource(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
+        let Some(view) = self.views.last().map(|v| v.id()) else {
+            return vec![];
+        };
+        vec![Cmd::SaveResource {
+            view,
+            kind: t.kind.clone(),
+            ns: t.ns.clone(),
+            name: t.name.clone(),
+        }]
+    }
+
+    /// `shift-j`: resolve the row's owner and open that kind, filtered to it.
+    fn jump_to_owner(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
+        let Some(view) = self.views.last().map(|v| v.id()) else {
+            return vec![];
+        };
+        vec![Cmd::Fetch {
+            view,
+            what: crate::cmd::Fetch::Owner {
+                kind: t.kind.clone(),
+                ns: t.ns.clone(),
+                name: t.name.clone(),
+            },
+        }]
+    }
+
+    /// Opens `kind` narrowed to a single name; used by jump-to-owner and `z`.
+    pub fn open_kind_filtered(&mut self, kind: &str, ns: Option<String>, name: &str) -> Vec<Cmd> {
+        if ns.is_some() {
+            self.set_namespace(ns);
+        }
+        match crate::views::resources::open(self, kind, None) {
+            Some(view) => {
+                let mut cmds = self.replace_views(vec![view]);
+                if let Some(v) = self.views.last_mut() {
+                    cmds.extend(v.set_filter(name));
+                }
+                cmds
+            }
+            None => {
+                self.chrome.flash(format!("unknown kind: {kind}"), true);
+                vec![]
+            }
+        }
+    }
+
+    /// `z` on a Deployment: its ReplicaSets, filtered by the deployment name.
+    fn open_replicasets(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
+        self.open_kind_filtered("replicasets", t.ns.clone(), &t.name)
+    }
+
+    /// `a` on a Pod: attach; several containers go through the picker.
+    fn begin_attach(&mut self, t: &crate::view::Target) -> Vec<Cmd> {
+        let Some(view) = self.views.last().map(|v| v.id()) else {
+            return vec![];
+        };
+        if self.ctx().readonly {
+            self.chrome.flash("readonly: attach disabled", true);
+            return vec![];
+        }
+        vec![Cmd::Fetch {
+            view,
+            what: crate::cmd::Fetch::AttachTargets {
+                ns: t.ns.clone().unwrap_or_default(),
+                pod: t.name.clone(),
+            },
+        }]
+    }
+
+    /// `-`: re-run the most recent `:` command.
+    fn history_repeat(&mut self) -> Vec<Cmd> {
+        match self.history.last().cloned() {
+            Some(cmd) => {
+                self.history_pos = self.history.len();
+                self.handle_command(&cmd)
+            }
+            None => {
+                self.chrome.flash("no command history", false);
+                vec![]
+            }
+        }
+    }
+
+    /// `[` / `]`: step back/forward through the `:` command history.
+    fn history_step(&mut self, delta: isize) -> Vec<Cmd> {
+        if self.history.is_empty() {
+            self.chrome.flash("no command history", false);
+            return vec![];
+        }
+        let last = self.history.len() - 1;
+        let pos = self.history_pos.min(last) as isize + delta;
+        let pos = pos.clamp(0, last as isize) as usize;
+        self.history_pos = pos;
+        let cmd = self.history[pos].clone();
+        self.handle_command(&cmd)
+    }
+
+    /// Records a `:` command for `-` / `[` / `]`, collapsing repeats.
+    fn remember_command(&mut self, text: &str) {
+        if self.history.last().map(String::as_str) == Some(text) {
+            self.history_pos = self.history.len();
+            return;
+        }
+        self.history.push(text.to_string());
+        if self.history.len() > 50 {
+            self.history.remove(0);
+        }
+        self.history_pos = self.history.len();
+    }
+
     fn quit_cmds(&mut self) -> Vec<Cmd> {
         let mut cmds: Vec<Cmd> = self.views.iter_mut().flat_map(|v| v.on_pop()).collect();
         cmds.push(Cmd::Quit);
@@ -1219,11 +1516,17 @@ impl App {
 
     /// Full-frame render: header, body (top view), footer.
     pub fn render(&self, f: &mut Frame) {
-        let header_h = Chrome::header_height(f.area().width);
+        let show_header = self.chrome.show_header && !self.chrome.fullscreen;
+        let show_crumbs = self.chrome.show_crumbs && !self.chrome.fullscreen;
+        let header_h = if show_header {
+            Chrome::header_height(f.area().width)
+        } else {
+            0
+        };
         let [header, body, footer] = Layout::vertical([
             Constraint::Length(header_h),
             Constraint::Min(1),
-            Constraint::Length(1),
+            Constraint::Length(if show_crumbs { 1 } else { 0 }),
         ])
         .areas(f.area());
 
@@ -1236,7 +1539,9 @@ impl App {
             .into_iter()
             .filter(|h| !readonly || !h.mutating)
             .collect();
-        self.chrome.render_header(f, header, &self.theme, &hints);
+        if show_header {
+            self.chrome.render_header(f, header, &self.theme, &hints);
+        }
 
         // prompt replaces the title row; the view keeps the rest
         let (title_row, view_area) = if self.chrome.prompt.is_some() {
@@ -1253,8 +1558,10 @@ impl App {
             v.render(f, view_area, &self.theme, &v.filter());
         }
 
-        let crumbs: Vec<String> = self.views.iter().map(|v| v.crumb()).collect();
-        self.chrome.render_footer(f, footer, &self.theme, &crumbs);
+        if show_crumbs {
+            let crumbs: Vec<String> = self.views.iter().map(|v| v.crumb()).collect();
+            self.chrome.render_footer(f, footer, &self.theme, &crumbs);
+        }
 
         if self.chrome.pick.is_some() {
             self.chrome.render_pick(f, f.area(), &self.theme);

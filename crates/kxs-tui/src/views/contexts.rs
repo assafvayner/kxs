@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -24,6 +24,10 @@ pub struct ContextsView {
     /// context name → ping result (version or error)
     pings: HashMap<String, Result<String, String>>,
     pending: HashSet<String>,
+    filter: String,
+    scroll: crate::table::Scroll,
+    /// Body height of the last frame, for page-sized moves.
+    viewport_rows: std::cell::Cell<u16>,
 }
 
 struct Row0 {
@@ -43,11 +47,32 @@ impl ContextsView {
             selected,
             pings: HashMap::new(),
             pending: HashSet::new(),
+            filter: String::new(),
+            scroll: Default::default(),
+            viewport_rows: std::cell::Cell::new(10),
         }
     }
 
+    /// Rows surviving the `/` filter, in display order.
+    fn visible_rows(&self) -> Vec<&Row0> {
+        let pred = kxs_cluster::table::filter_predicate(&self.filter);
+        self.rows
+            .iter()
+            .filter(|r| pred(&format!("{} {}", r.name, r.cluster)))
+            .collect()
+    }
+
     fn keys(&self) -> Vec<String> {
-        self.rows.iter().map(|r| r.name.clone()).collect()
+        self.visible_rows().iter().map(|r| r.name.clone()).collect()
+    }
+
+    fn selected_index(&self) -> Option<usize> {
+        let sel = self.selected.as_deref()?;
+        self.visible_rows().iter().position(|r| r.name == sel)
+    }
+
+    fn page(&self) -> isize {
+        self.viewport_rows.get().max(1) as isize
     }
 
     /// One ping per not-yet-answered context, requested once.
@@ -82,7 +107,7 @@ impl View for ContextsView {
     }
 
     fn title(&self) -> String {
-        format!("Contexts[{}]", self.rows.len())
+        format!("Contexts[{}]", self.visible_rows().len())
     }
 
     fn crumb(&self) -> String {
@@ -92,7 +117,8 @@ impl View for ContextsView {
     fn hints(&self) -> Vec<Hint> {
         vec![
             Hint::action("enter", "connect"),
-            Hint::action("r", "re-ping"),
+            Hint::action("/", "filter"),
+            Hint::action("ctrl-r", "re-ping"),
         ]
     }
 
@@ -106,12 +132,32 @@ impl View for ContextsView {
                 self.selected = move_selection(&self.keys(), self.selected.as_deref(), -1);
                 vec![]
             }
+            KeyCode::PageDown => {
+                let page = self.page();
+                self.selected = move_selection(&self.keys(), self.selected.as_deref(), page);
+                vec![]
+            }
+            KeyCode::PageUp => {
+                let page = self.page();
+                self.selected = move_selection(&self.keys(), self.selected.as_deref(), -page);
+                vec![]
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let page = self.page();
+                self.selected = move_selection(&self.keys(), self.selected.as_deref(), page);
+                vec![]
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let page = self.page();
+                self.selected = move_selection(&self.keys(), self.selected.as_deref(), -page);
+                vec![]
+            }
             KeyCode::Home | KeyCode::Char('g') => {
-                self.selected = self.rows.first().map(|r| r.name.clone());
+                self.selected = self.keys().first().cloned();
                 vec![]
             }
             KeyCode::End | KeyCode::Char('G') => {
-                self.selected = self.rows.last().map(|r| r.name.clone());
+                self.selected = self.keys().last().cloned();
                 vec![]
             }
             KeyCode::Enter => match &self.selected {
@@ -120,7 +166,7 @@ impl View for ContextsView {
                 }],
                 None => vec![],
             },
-            KeyCode::Char('r') => {
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // re-ping everything
                 self.pings.clear();
                 self.pending.clear();
@@ -143,10 +189,27 @@ impl View for ContextsView {
     }
 
     fn wants_filter(&self) -> bool {
-        false
+        true
+    }
+
+    fn filter(&self) -> String {
+        self.filter.clone()
+    }
+
+    fn set_filter(&mut self, filter: &str) -> Vec<Cmd> {
+        self.filter = filter.to_string();
+        let keys = self.keys();
+        if !keys
+            .iter()
+            .any(|k| Some(k.as_str()) == self.selected.as_deref())
+        {
+            self.selected = keys.first().cloned();
+        }
+        vec![]
     }
 
     fn render(&self, f: &mut Frame, area: Rect, th: &Theme, _filter: &str) {
+        self.viewport_rows.set(area.height.saturating_sub(3));
         let block = Block::new()
             .borders(Borders::ALL)
             .border_style(Style::new().fg(th.colors.border))
@@ -155,9 +218,14 @@ impl View for ContextsView {
                 Style::new().fg(th.colors.accent),
             )));
         f.render_widget(block, area);
-        if self.rows.is_empty() {
-            let msg = Paragraph::new("no contexts in the kubeconfig")
-                .style(Style::new().fg(th.colors.fg_dim));
+        let visible = self.visible_rows();
+        if visible.is_empty() {
+            let msg = Paragraph::new(if self.rows.is_empty() {
+                "no contexts in the kubeconfig"
+            } else {
+                "no contexts match the filter"
+            })
+            .style(Style::new().fg(th.colors.fg_dim));
             f.render_widget(
                 msg,
                 Rect {
@@ -169,7 +237,7 @@ impl View for ContextsView {
             );
             return;
         }
-        let rows = self.rows.iter().map(|r| {
+        let rows = visible.iter().map(|r| {
             let status = if let Some(res) = self.pings.get(&r.name) {
                 match res {
                     Ok(v) => Span::styled(format!("✓ {v}"), Style::new().fg(th.colors.green)),
@@ -211,6 +279,6 @@ impl View for ContextsView {
                     Style::new().fg(th.colors.accent),
                 ))),
         );
-        f.render_widget(table, area);
+        self.scroll.render(f, area, table, self.selected_index());
     }
 }

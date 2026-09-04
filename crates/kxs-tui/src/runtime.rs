@@ -74,6 +74,60 @@ async fn ping_one(sessions: &Shared, context: &str) -> Result<String, String> {
     session::ping(&sess, Duration::from_secs(5)).await
 }
 
+/// Writes a resource's YAML under the dump directory, k9s' `ctrl-s`.
+/// Returns the path written.
+async fn save_resource(
+    sessions: &Shared,
+    kind: &kxs_cluster::discovery::ResourceKind,
+    ns: Option<&str>,
+    name: &str,
+) -> Result<String, String> {
+    let (sess, context) = {
+        let s = sessions.lock().expect("sessions lock");
+        let sess = s.active_session().ok_or("not connected")?;
+        let context = s
+            .active
+            .as_ref()
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+        (sess, context)
+    };
+    let yaml = get_yaml(
+        sess.client.clone(),
+        &kind.group,
+        &kind.version,
+        &kind.kind,
+        &kind.plural,
+        ns,
+        name,
+    )
+    .await?;
+    let dir = config::dump_dir()?.join(sanitize(&context));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let stamp = kxs_cluster::clock::now_ms() / 1000;
+    let file = dir.join(format!(
+        "{}-{}-{}.yaml",
+        sanitize(&kind.plural),
+        sanitize(name),
+        stamp
+    ));
+    std::fs::write(&file, yaml).map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(file.display().to_string())
+}
+
+/// Path-safe form of a context / resource name.
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 async fn fetch(sessions: &Shared, what: Fetch) -> Result<FetchResult, String> {
     let sess = {
         let s = sessions.lock().expect("sessions lock");
@@ -135,6 +189,26 @@ async fn fetch(sessions: &Shared, what: Fetch) -> Result<FetchResult, String> {
             pod: pod.clone(),
             infos: kxs_cluster::pods::list_container_info(sess.client.clone(), &ns, &pod).await?,
         }),
+        Fetch::AttachTargets { ns, pod } => Ok(FetchResult::AttachContainers {
+            ns: ns.clone(),
+            pod: pod.clone(),
+            infos: kxs_cluster::pods::list_container_info(sess.client.clone(), &ns, &pod).await?,
+        }),
+        Fetch::Owner { kind, ns, name } => {
+            let yaml = get_yaml(
+                sess.client.clone(),
+                &kind.group,
+                &kind.version,
+                &kind.kind,
+                &kind.plural,
+                ns.as_deref(),
+                &name,
+            )
+            .await?;
+            Ok(FetchResult::Owner(kxs_cluster::resources::owner_reference(
+                &yaml,
+            )))
+        }
         Fetch::ForwardPorts { ns, pod } => Ok(FetchResult::ForwardPorts {
             ns: ns.clone(),
             pod: pod.clone(),
@@ -302,6 +376,19 @@ impl Runtime {
                                 )
                                 .await
                             }
+                            SuspendAction::Attach { ns, pod, container } => {
+                                let size = crossterm::terminal::size().unwrap_or((80, 24));
+                                let (cols, rows) = size;
+                                crate::suspend::run_attach(
+                                    client,
+                                    &ns,
+                                    &pod,
+                                    container.as_deref(),
+                                    cols,
+                                    rows,
+                                )
+                                .await
+                            }
                         },
                         None => Err("not connected".into()),
                     };
@@ -348,6 +435,39 @@ impl Runtime {
                 tokio::spawn(async move {
                     let result = connect_one(&sessions, &config, &context).await;
                     let _ = tx.send(Msg::Connected { context, result });
+                });
+                Ok(false)
+            }
+            Cmd::OpenKind { query } => {
+                let cmds = app.exec_command(&query);
+                for c in cmds {
+                    if Box::pin(self.execute(c, app)).await? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Cmd::SaveResource {
+                view,
+                kind,
+                ns,
+                name,
+            } => {
+                let tx = self.tx.clone();
+                let sessions = self.sessions.clone();
+                tokio::spawn(async move {
+                    let result = save_resource(&sessions, &kind, ns.as_deref(), &name).await;
+                    let _ = view;
+                    let _ = tx.send(match result {
+                        Ok(path) => Msg::Flash {
+                            text: format!("saved {path}"),
+                            error: false,
+                        },
+                        Err(e) => Msg::Flash {
+                            text: e,
+                            error: true,
+                        },
+                    });
                 });
                 Ok(false)
             }

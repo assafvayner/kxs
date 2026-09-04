@@ -27,7 +27,7 @@ pub struct ExecHandle {
     pub stop: tokio::sync::oneshot::Sender<()>,
 }
 
-/// Attach `command` (e.g. ["/bin/sh"]) in `pod`/`container`, streaming merged
+/// Run `command` (e.g. ["/bin/sh"]) in `pod`/`container`, streaming merged
 /// output to `send` (base64). Returns a handle for stdin/resize/stop.
 #[allow(clippy::too_many_arguments)]
 pub async fn exec(
@@ -41,15 +41,48 @@ pub async fn exec(
     send: impl Fn(ExecEvent) -> bool + Send + Sync + 'static,
 ) -> Result<ExecHandle, String> {
     let api: Api<Pod> = Api::namespaced(client, namespace);
-    let mut ap = AttachParams::interactive_tty();
-    if let Some(c) = container {
-        ap = ap.container(c.to_string());
-    }
-    let mut proc: AttachedProcess = api
-        .exec(pod, command, &ap)
+    let proc = api
+        .exec(pod, command, &attach_params(container))
         .await
         .map_err(|e| e.to_string())?;
+    drive(proc, cols, rows, send).await
+}
 
+/// Attach to the container's already-running process (kubectl attach), rather
+/// than starting a new one. Same streaming contract as `exec`.
+pub async fn attach(
+    client: Client,
+    namespace: &str,
+    pod: &str,
+    container: Option<&str>,
+    cols: u16,
+    rows: u16,
+    send: impl Fn(ExecEvent) -> bool + Send + Sync + 'static,
+) -> Result<ExecHandle, String> {
+    let api: Api<Pod> = Api::namespaced(client, namespace);
+    let proc = api
+        .attach(pod, &attach_params(container))
+        .await
+        .map_err(|e| e.to_string())?;
+    drive(proc, cols, rows, send).await
+}
+
+fn attach_params(container: Option<&str>) -> AttachParams {
+    let ap = AttachParams::interactive_tty();
+    match container {
+        Some(c) => ap.container(c.to_string()),
+        None => ap,
+    }
+}
+
+/// Pumps an attached process' streams onto `send` and returns the control
+/// handle; shared by `exec` and `attach`.
+async fn drive(
+    mut proc: AttachedProcess,
+    cols: u16,
+    rows: u16,
+    send: impl Fn(ExecEvent) -> bool + Send + Sync + 'static,
+) -> Result<ExecHandle, String> {
     let mut out = proc.stdout().ok_or("no stdout from exec")?;
     let mut stdin_writer = proc.stdin().ok_or("no stdin from exec")?;
     let mut resize_writer = proc.terminal_size();

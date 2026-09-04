@@ -23,6 +23,7 @@ pub struct RolloutView {
     pending: bool,
     in_flight: bool,
     error: Option<String>,
+    scroll: crate::table::Scroll,
 }
 
 impl RolloutView {
@@ -36,6 +37,7 @@ impl RolloutView {
             pending: true,
             in_flight: false,
             error: None,
+            scroll: Default::default(),
         }
     }
 }
@@ -174,22 +176,20 @@ impl View for RolloutView {
                 Style::new()
             })
         });
-        f.render_widget(
-            Table::new(
-                rows,
-                [
-                    Constraint::Length(10),
-                    Constraint::Length(10),
-                    Constraint::Percentage(60),
-                    Constraint::Length(10),
-                ],
-            )
-            .header(
-                Row::new(["REVISION", "AGE", "IMAGES", "CURRENT"])
-                    .style(Style::new().fg(th.colors.fg_dim).bold()),
-            )
-            .block(block),
-            area,
-        );
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(10),
+                Constraint::Length(10),
+                Constraint::Percentage(60),
+                Constraint::Length(10),
+            ],
+        )
+        .header(
+            Row::new(["REVISION", "AGE", "IMAGES", "CURRENT"])
+                .style(Style::new().fg(th.colors.fg_dim).bold()),
+        )
+        .block(block);
+        self.scroll.render(f, area, table, Some(self.selected));
     }
 }

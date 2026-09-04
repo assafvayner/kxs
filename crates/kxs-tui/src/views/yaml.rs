@@ -102,6 +102,10 @@ impl View for YamlView {
         self.pager.hints()
     }
 
+    fn toggle_fullscreen(&mut self) -> Option<bool> {
+        Some(self.pager.toggle_fullscreen())
+    }
+
     fn handle_key(&mut self, key: KeyEvent, ctx: &AppCtx) -> Vec<Cmd> {
         self.pager.handle_key(key, ctx)
     }

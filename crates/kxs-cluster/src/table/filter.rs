@@ -28,22 +28,50 @@ pub fn split_filter(filter: &str) -> (Option<String>, String) {
 }
 
 /// Compile a filter once; returns a predicate with `match_row`'s semantics.
+///
+/// k9s grammar: a bare filter is a case-insensitive regex, `!` inverts it,
+/// `-f` fuzzy-matches (the query's characters in order, anywhere). `-r` stays
+/// as an explicit-regex spelling of the default. An unparseable regex degrades
+/// to a substring test rather than matching nothing.
 pub fn filter_predicate(filter: &str) -> Box<dyn Fn(&str) -> bool + Send + Sync> {
     let f = filter.trim();
     if f.is_empty() {
         return Box::new(|_| true);
     }
-    if let Some(pattern) = f.strip_prefix("-r ") {
-        match regex::Regex::new(pattern) {
-            Ok(re) => return Box::new(move |name: &str| re.is_match(name)),
-            Err(_) => return Box::new(|_| false),
+    if let Some(rest) = f.strip_prefix("-f") {
+        let needle = rest.trim().to_lowercase();
+        if needle.is_empty() {
+            return Box::new(|_| true);
+        }
+        return Box::new(move |name: &str| fuzzy_match(&name.to_lowercase(), &needle));
+    }
+    let (inverse, rest) = match f.strip_prefix('!') {
+        Some(rest) => (true, rest.trim()),
+        None => (false, f),
+    };
+    let pattern = rest.strip_prefix("-r ").map(str::trim).unwrap_or(rest);
+    if pattern.is_empty() {
+        return Box::new(|_| true);
+    }
+    match regex::RegexBuilder::new(pattern)
+        .case_insensitive(true)
+        .build()
+    {
+        Ok(re) => Box::new(move |name: &str| re.is_match(name) != inverse),
+        Err(_) => {
+            let needle = pattern.to_lowercase();
+            Box::new(move |name: &str| name.to_lowercase().contains(&needle) != inverse)
         }
     }
-    let needle = f.to_lowercase();
-    Box::new(move |name: &str| name.to_lowercase().contains(&needle))
 }
 
-/// Substring by default; `-r <regex>` for regex. Invalid regex → no match.
+/// Subsequence test: every char of `needle`, in order, somewhere in `hay`.
+fn fuzzy_match(hay: &str, needle: &str) -> bool {
+    let mut chars = hay.chars();
+    needle.chars().all(|c| chars.any(|h| h == c))
+}
+
+/// Regex by default; `!` inverts, `-f` fuzzy-matches, `-r` forces regex.
 pub fn match_row(name: &str, filter: &str) -> bool {
     filter_predicate(filter)(name)
 }
@@ -102,8 +130,32 @@ mod tests {
     }
 
     #[test]
-    fn invalid_regex_falls_back_to_no_match() {
-        assert!(!match_row("web", "-r ["));
+    fn invalid_regex_falls_back_to_substring() {
+        assert!(match_row("web[1]", "-r web["));
+        assert!(!match_row("api", "-r web["));
+    }
+
+    #[test]
+    fn bare_filter_is_a_case_insensitive_regex() {
+        assert!(match_row("blee-7", "fred|blee"));
+        assert!(!match_row("zork-1", "fred|blee"));
+        assert!(match_row("web-1", "^WEB"));
+    }
+
+    #[test]
+    fn bang_inverts_the_match() {
+        assert!(!match_row("web-1", "!web"));
+        assert!(match_row("api-1", "!web"));
+        assert!(match_row("api-1", "!fred|blee"));
+    }
+
+    #[test]
+    fn dash_f_is_a_fuzzy_subsequence() {
+        assert!(match_row("web-server", "-f wbsv"));
+        assert!(match_row("web-server", "-f wb"));
+        assert!(!match_row("api-gateway", "-f wbsv"));
+        // out of order does not match
+        assert!(!match_row("web-server", "-f vwb"));
     }
 
     #[test]

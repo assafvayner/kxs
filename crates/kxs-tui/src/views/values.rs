@@ -4,7 +4,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use kxs_cluster::workloads::ConfigEntry;
@@ -181,8 +181,12 @@ impl View for ValuesView {
                 },
             )));
         }
+        let rows = keys_area.height.saturating_sub(2) as usize;
+        let offset = self.selected.saturating_sub(rows.saturating_sub(1));
         f.render_widget(
-            Paragraph::new(key_lines).block(block("Keys".into())),
+            Paragraph::new(key_lines)
+                .scroll((offset as u16, 0))
+                .block(block("Keys".into())),
             keys_area,
         );
         // value pane
@@ -191,7 +195,9 @@ impl View for ValuesView {
             .map(|e| self.display_value(e))
             .unwrap_or_default();
         f.render_widget(
-            Paragraph::new(value_text).block(block("Value".into())),
+            Paragraph::new(value_text)
+                .wrap(Wrap { trim: false })
+                .block(block("Value".into())),
             value_area,
         );
     }

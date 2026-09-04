@@ -46,6 +46,8 @@ pub struct Target {
     pub desired_replicas: Option<i32>,
     /// SUSPEND column value for CronJob rows.
     pub suspend: Option<bool>,
+    /// `spec.unschedulable` for Node rows, so `u` can toggle cordon.
+    pub unschedulable: Option<bool>,
 }
 
 pub trait View {
@@ -91,6 +93,20 @@ pub trait View {
     /// global namespace favorites while they are the top view.
     fn handles_digits(&self) -> bool {
         false
+    }
+    /// `ctrl-w`: keep every column even when the terminal is narrow.
+    /// Returns whether the view has wide columns to toggle.
+    fn toggle_wide(&mut self) -> Option<bool> {
+        None
+    }
+    /// `ctrl-z`: show only rows in a faulty state. Returns the new state, or
+    /// `None` when the view has no notion of faults.
+    fn toggle_faults(&mut self) -> Option<bool> {
+        None
+    }
+    /// `f`: fill the frame, hiding the header. Returns the new state.
+    fn toggle_fullscreen(&mut self) -> Option<bool> {
+        None
     }
     /// Current filter text, shown in the title row.
     fn filter(&self) -> String {

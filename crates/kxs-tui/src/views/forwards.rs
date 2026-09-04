@@ -19,6 +19,7 @@ pub struct ForwardsView {
     /// Snapshot of the session registry, refreshed each tick.
     forwards: Vec<(u64, String, String, u16, u16, i64)>, // id, ns, pod, pod_port, local_port, age_secs
     selected: usize,
+    scroll: crate::table::Scroll,
 }
 
 impl ForwardsView {
@@ -27,6 +28,7 @@ impl ForwardsView {
             id: app.alloc_id(),
             forwards: vec![],
             selected: 0,
+            scroll: Default::default(),
         }
     }
 }
@@ -125,23 +127,21 @@ impl View for ForwardsView {
                     Style::new()
                 })
             });
-        f.render_widget(
-            Table::new(
-                rows,
-                [
-                    Constraint::Length(8),
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(40),
-                    Constraint::Length(8),
-                    Constraint::Length(8),
-                ],
-            )
-            .header(
-                Row::new(["LOCAL", "NAMESPACE", "POD", "PORT", "AGE"])
-                    .style(Style::new().fg(th.colors.fg_dim).bold()),
-            )
-            .block(block),
-            area,
-        );
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(8),
+                Constraint::Percentage(25),
+                Constraint::Percentage(40),
+                Constraint::Length(8),
+                Constraint::Length(8),
+            ],
+        )
+        .header(
+            Row::new(["LOCAL", "NAMESPACE", "POD", "PORT", "AGE"])
+                .style(Style::new().fg(th.colors.fg_dim).bold()),
+        )
+        .block(block);
+        self.scroll.render(f, area, table, Some(self.selected));
     }
 }

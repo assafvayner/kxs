@@ -94,7 +94,6 @@ pub const PROPAGATIONS: [&str; 3] = ["Background", "Foreground", "Orphan"];
 
 /// Chrome owns everything that is not a body view: header data, the `:`/`/`
 /// prompt, flash messages, and (later phases) modals.
-#[derive(Default)]
 pub struct Chrome {
     pub context: String,
     pub cluster: String,
@@ -113,6 +112,35 @@ pub struct Chrome {
     pub prompt: Option<Prompt>,
     pub flash: Option<Flash>,
     pub size: (u16, u16),
+    /// `ctrl-e` / `ctrl-g`: header and breadcrumb visibility.
+    pub show_header: bool,
+    pub show_crumbs: bool,
+    /// `f` in a pager/log view: the body takes the whole frame.
+    pub fullscreen: bool,
+}
+
+impl Default for Chrome {
+    fn default() -> Self {
+        Chrome {
+            context: String::new(),
+            cluster: String::new(),
+            user: String::new(),
+            version: String::new(),
+            namespace: None,
+            favorites: Vec::new(),
+            cpu_mem: None,
+            pick: None,
+            confirm: None,
+            input: None,
+            delete: None,
+            prompt: None,
+            flash: None,
+            size: (0, 0),
+            show_header: true,
+            show_crumbs: true,
+            fullscreen: false,
+        }
+    }
 }
 
 impl Chrome {

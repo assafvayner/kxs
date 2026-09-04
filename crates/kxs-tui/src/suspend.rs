@@ -147,16 +147,43 @@ pub async fn run_exec(
     cols: u16,
     rows: u16,
 ) -> Result<Option<String>, String> {
+    let shell = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "command -v bash >/dev/null && exec bash || exec sh".to_string(),
+    ];
+    run_session(client, ns, pod, container, cols, rows, Some(shell)).await
+}
+
+/// The `a` attach flow: join the container's already-running process instead
+/// of starting a shell. Same terminal handoff as `run_exec`.
+pub async fn run_attach(
+    client: kube::Client,
+    ns: &str,
+    pod: &str,
+    container: Option<&str>,
+    cols: u16,
+    rows: u16,
+) -> Result<Option<String>, String> {
+    run_session(client, ns, pod, container, cols, rows, None).await
+}
+
+/// Drives one interactive remote session on the real terminal.
+/// `command` = `Some(argv)` execs it, `None` attaches to the running process.
+async fn run_session(
+    client: kube::Client,
+    ns: &str,
+    pod: &str,
+    container: Option<&str>,
+    cols: u16,
+    rows: u16,
+    command: Option<Vec<String>>,
+) -> Result<Option<String>, String> {
     use base64::Engine;
     use std::io::Write;
 
     // re-raw the terminal ourselves: the remote shell needs raw input
     crossterm::terminal::enable_raw_mode().map_err(|e| e.to_string())?;
-    let command = vec![
-        "/bin/sh".to_string(),
-        "-c".to_string(),
-        "command -v bash >/dev/null && exec bash || exec sh".to_string(),
-    ];
     let (close_tx, mut close_rx) = tokio::sync::mpsc::unbounded_channel::<Option<String>>();
     let send = move |ev: kxs_cluster::exec::ExecEvent| match ev {
         kxs_cluster::exec::ExecEvent::Output { data } => {
@@ -172,11 +199,13 @@ pub async fn run_exec(
             false
         }
     };
-    let handle = match kxs_cluster::exec::exec(
-        client, ns, pod, container, command, cols, rows, send,
-    )
-    .await
-    {
+    let opened = match command {
+        Some(command) => {
+            kxs_cluster::exec::exec(client, ns, pod, container, command, cols, rows, send).await
+        }
+        None => kxs_cluster::exec::attach(client, ns, pod, container, cols, rows, send).await,
+    };
+    let handle = match opened {
         Ok(h) => h,
         // do not leave raw mode enabled on the error path
         Err(e) => {

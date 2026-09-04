@@ -10,6 +10,11 @@ use crate::view::ViewId;
 /// Every state change enters through `App::update` as a `Msg`.
 pub enum Msg {
     Key(KeyEvent),
+    /// A status line message from a background task.
+    Flash {
+        text: String,
+        error: bool,
+    },
     Resize(u16, u16),
     Tick,
     /// A view's background task started; carries its stop handle.

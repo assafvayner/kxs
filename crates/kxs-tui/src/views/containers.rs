@@ -23,6 +23,7 @@ pub struct ContainersView {
     pending: bool,
     in_flight: bool,
     error: Option<String>,
+    scroll: crate::table::Scroll,
 }
 
 impl ContainersView {
@@ -36,6 +37,7 @@ impl ContainersView {
             pending: true,
             in_flight: false,
             error: None,
+            scroll: Default::default(),
         }
     }
 }
@@ -188,16 +190,14 @@ impl View for ContainersView {
             Constraint::Percentage(12),
             Constraint::Length(5),
         ];
-        f.render_widget(
-            Table::new(rows, widths)
-                .header(
-                    Row::new([
-                        "NAME", "IMAGE", "READY", "STATE", "RESTARTS", "PORTS", "INIT",
-                    ])
-                    .style(Style::new().fg(th.colors.fg_dim).bold()),
-                )
-                .block(block),
-            area,
-        );
+        let table = Table::new(rows, widths)
+            .header(
+                Row::new([
+                    "NAME", "IMAGE", "READY", "STATE", "RESTARTS", "PORTS", "INIT",
+                ])
+                .style(Style::new().fg(th.colors.fg_dim).bold()),
+            )
+            .block(block);
+        self.scroll.render(f, area, table, Some(self.selected));
     }
 }
