@@ -80,11 +80,7 @@ impl ResourcesView {
     fn column_map(&self) -> Vec<usize> {
         let Some(t) = &self.table else { return vec![] };
         let mut idx: Vec<usize> = (0..t.columns.len()).collect();
-        if let Some(i) = t
-            .columns
-            .iter()
-            .position(|c| c.trim().eq_ignore_ascii_case("age"))
-        {
+        if let Some(i) = t.columns.iter().position(|c| is_age_col(c)) {
             if i != idx.len() - 1 {
                 idx.remove(i);
                 idx.push(i);
@@ -97,7 +93,7 @@ impl ResourcesView {
         let Some(t) = &self.table else { return display };
         let map = self.column_map();
         match map.get(display) {
-            Some(&ci) if t.columns[ci].trim().eq_ignore_ascii_case("age") => t.columns.len(),
+            Some(&ci) if is_age_col(&t.columns[ci]) => t.columns.len(),
             Some(&ci) => ci,
             None => display,
         }
@@ -105,16 +101,21 @@ impl ResourcesView {
 
     /// Cell text for display column `ci`; the synthetic Age column is rendered
     /// from `created`.
-    fn cell_text(&self, r: &ResourceRow, ci: usize, now_ms: i64) -> String {
+    fn cell_text<'a>(
+        &self,
+        r: &'a ResourceRow,
+        ci: usize,
+        now_ms: i64,
+    ) -> std::borrow::Cow<'a, str> {
         let is_age = self
             .table
             .as_ref()
             .and_then(|t| t.columns.get(ci))
-            .is_some_and(|c| c.trim().eq_ignore_ascii_case("age"));
+            .is_some_and(|c| is_age_col(c));
         if is_age {
-            kxs_core::format::age(r.created.as_deref(), now_ms)
+            std::borrow::Cow::Owned(kxs_core::format::age(r.created.as_deref(), now_ms))
         } else {
-            r.cells.get(ci).cloned().unwrap_or_default()
+            std::borrow::Cow::Borrowed(r.cells.get(ci).map(String::as_str).unwrap_or(""))
         }
     }
 
@@ -122,10 +123,9 @@ impl ResourcesView {
     /// max(header, widest cell) capped at 60. When the sum exceeds the area,
     /// rightmost non-NAME non-AGE columns are dropped; NAME absorbs the
     /// remaining slack. AGE is always kept last.
-    fn layout(&self, total: u16) -> Vec<(usize, u16)> {
+    fn layout(&self, total: u16, now_ms: i64) -> Vec<(usize, u16)> {
         let Some(t) = &self.table else { return vec![] };
         let map = self.column_map();
-        let now_ms = kxs_cluster::clock::now_ms();
         let mut cols: Vec<(usize, u16)> = map
             .iter()
             .map(|&ci| {
@@ -611,12 +611,13 @@ impl View for ResourcesView {
             return;
         }
         let visible = self.visible_rows();
-        let cols = self.layout(area.width);
+        let now_ms = kxs_cluster::clock::now_ms();
+        let cols = self.layout(area.width, now_ms);
         let header_cells: Vec<Span> = cols
             .iter()
             .map(|(ci, _)| {
                 let t = self.table.as_ref().expect("table");
-                let key = if t.columns[*ci].trim().eq_ignore_ascii_case("age") {
+                let key = if is_age_col(&t.columns[*ci]) {
                     t.columns.len()
                 } else {
                     *ci
@@ -628,7 +629,6 @@ impl View for ResourcesView {
                 )
             })
             .collect();
-        let now_ms = kxs_cluster::clock::now_ms();
         let rows = visible.iter().map(|r| {
             let cells: Vec<Span> = cols
                 .iter()
@@ -650,6 +650,11 @@ impl View for ResourcesView {
             .block(block);
         self.scroll.render(f, area, table, self.selected_index());
     }
+}
+
+/// Whether a column header names the synthetic AGE column.
+fn is_age_col(name: &str) -> bool {
+    name.trim().eq_ignore_ascii_case("age")
 }
 
 /// `ctrl-z` predicate for a server-side table row: a healthy row is one whose

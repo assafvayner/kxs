@@ -129,7 +129,7 @@ fn resources_view_renders_age_from_created() {
     let mut view = resources_view(&mut app);
     let ctx = app.ctx();
     let id = view.id();
-    let created = "2026-08-01T00:00:00Z";
+    let created = "2020-01-01T00:00:00Z";
     let table = ResourceTable {
         columns: vec!["NAME".into(), "READY".into(), "STATUS".into(), "Age".into()],
         rows: vec![ResourceRow {
