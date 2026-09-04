@@ -314,7 +314,6 @@ impl View for ResourcesView {
     fn on_started(&mut self, handle: StopHandle, _ctx: &AppCtx) -> Vec<Cmd> {
         self.handle = Some(handle);
         self.pending = false;
-        self.status = None;
         vec![]
     }
 
@@ -501,11 +500,7 @@ impl View for ResourcesView {
                     vec![]
                 }
                 TableEvent::Status { state, message } => {
-                    self.status = Some(match (state.as_str(), message) {
-                        ("connected", _) => "⟳ connected".into(),
-                        ("error", Some(m)) => format!("⟳ {m}"),
-                        _ => "⟳ reconnecting".into(),
-                    });
+                    self.status = crate::view::status_suffix(state, message.as_deref());
                     vec![]
                 }
             },

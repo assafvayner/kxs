@@ -117,3 +117,14 @@ pub trait View {
         vec![]
     }
 }
+
+/// Title suffix for a watch status event. `live` clears the indicator.
+pub fn status_suffix(state: &str, message: Option<&str>) -> Option<String> {
+    match (state, message) {
+        ("live", _) | ("connected", _) => None,
+        ("error", Some(m)) => Some(format!("⟳ {m}")),
+        ("error", None) => Some("⟳ error".into()),
+        (_, Some(m)) => Some(format!("⟳ reconnecting: {m}")),
+        (_, None) => Some("⟳ reconnecting".into()),
+    }
+}

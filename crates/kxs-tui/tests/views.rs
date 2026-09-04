@@ -1065,3 +1065,48 @@ fn readonly_refuses_attach() {
         .as_ref()
         .is_some_and(|f| f.text.contains("readonly")));
 }
+
+#[test]
+fn live_status_clears_indicator_and_errors_keep_message() {
+    let mut app = test_app();
+    let mut view = resources_view(&mut app);
+    let ctx = app.ctx();
+    let id = view.id();
+    view.on_msg(
+        &Msg::Table {
+            view: id,
+            ev: TableEvent::Status {
+                state: "reconnecting".into(),
+                message: Some("boom".into()),
+            },
+        },
+        &ctx,
+    );
+    assert!(
+        view.title().contains("⟳ reconnecting: boom"),
+        "{}",
+        view.title()
+    );
+    view.on_msg(
+        &Msg::Table {
+            view: id,
+            ev: TableEvent::Status {
+                state: "live".into(),
+                message: None,
+            },
+        },
+        &ctx,
+    );
+    assert!(!view.title().contains('⟳'), "{}", view.title());
+    view.on_msg(
+        &Msg::Table {
+            view: id,
+            ev: TableEvent::Status {
+                state: "error".into(),
+                message: Some("forbidden".into()),
+            },
+        },
+        &ctx,
+    );
+    assert!(view.title().contains("⟳ forbidden"), "{}", view.title());
+}
