@@ -58,6 +58,8 @@ pub struct App {
     history: Vec<String>,
     /// Cursor into `history`; `len()` means "past the newest entry".
     history_pos: usize,
+    /// `--readonly`: in-memory only, never serialized with the config.
+    readonly_override: bool,
 }
 
 impl App {
@@ -76,7 +78,17 @@ impl App {
             metrics_error_flashed: false,
             history: Vec::new(),
             history_pos: 0,
+            readonly_override: false,
         }
+    }
+
+    /// `--readonly`: in-memory only, never serialized with the config.
+    pub fn set_readonly_override(&mut self, on: bool) {
+        self.readonly_override = on;
+    }
+
+    fn readonly(&self) -> bool {
+        self.readonly_override || self.config.lock().map(|c| c.readonly).unwrap_or(false)
     }
 
     pub fn alloc_id(&mut self) -> ViewId {
@@ -144,7 +156,7 @@ impl App {
 
     pub fn ctx(&self) -> AppCtx {
         let s = self.sessions.lock().expect("sessions lock");
-        let readonly = self.config.lock().map(|c| c.readonly).unwrap_or(false);
+        let readonly = self.readonly();
         AppCtx {
             namespace: s.active.as_ref().and_then(|a| a.namespace.clone()),
             kinds: s.active_kinds(),
@@ -1527,7 +1539,7 @@ impl App {
         ])
         .areas(f.area());
 
-        let readonly = self.config.lock().map(|c| c.readonly).unwrap_or(false);
+        let readonly = self.readonly();
         let hints: Vec<crate::view::Hint> = self
             .views
             .last()
@@ -1715,5 +1727,13 @@ mod tests {
             crate::theme::get(crate::theme::DEFAULT_ID),
         );
         assert!(app.ctx().readonly);
+    }
+
+    #[test]
+    fn cli_readonly_does_not_touch_config() {
+        let mut app = test_app();
+        app.set_readonly_override(true);
+        assert!(app.ctx().readonly);
+        assert!(!app.config.lock().unwrap().readonly);
     }
 }

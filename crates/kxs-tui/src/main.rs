@@ -51,12 +51,9 @@ fn load_store(paths: Vec<std::path::PathBuf>) -> KubeconfigStore {
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let cli = Cli::parse();
-    let (mut cfg, cfg_warning) = config::load();
+    let (cfg, cfg_warning) = config::load();
     if let Some(w) = cfg_warning {
         eprintln!("kxs: {w}");
-    }
-    if cli.readonly {
-        cfg.readonly = true;
     }
     let theme_id = cli
         .theme
@@ -74,6 +71,7 @@ async fn main() -> Result<(), String> {
     let sessions: Shared = Arc::new(Mutex::new(Sessions::new(load_store(paths))));
     let config = Arc::new(Mutex::new(cfg));
     let mut app = App::new(sessions.clone(), config.clone(), theme::get(&theme_id));
+    app.set_readonly_override(cli.readonly);
 
     // Startup connect runs before raw mode so exec-auth plugins can prompt.
     let startup_context = cli.context.clone().or_else(|| {
