@@ -1186,3 +1186,52 @@ fn pods_status_uses_the_same_mapping() {
     );
     assert!(!view.title().contains("line two"), "{}", view.title());
 }
+
+#[test]
+fn events_view_shows_full_message_column() {
+    use kxs_tui::views::events::EventsView;
+    let mut app = test_app();
+    let mut view = EventsView::new(&mut app, Some("default".into()));
+    let ctx = app.ctx();
+    let id = view.id();
+    let table = ResourceTable {
+        columns: vec![
+            "Last Seen".into(),
+            "Type".into(),
+            "Reason".into(),
+            "Object".into(),
+            "Message".into(),
+            "Age".into(),
+        ],
+        rows: vec![ResourceRow {
+            key: "default/e1".into(),
+            name: "e1".into(),
+            namespace: Some("default".into()),
+            cells: vec![
+                "2m".into(),
+                "Warning".into(),
+                "BackOff".into(),
+                "pod/crasher".into(),
+                "Back-off restarting failed container crash in pod crasher".into(),
+            ],
+            created: Some("2026-09-01T00:00:00Z".into()),
+        }],
+    };
+    view.on_msg(
+        &Msg::Table {
+            view: id,
+            ev: TableEvent::Table { table },
+        },
+        &ctx,
+    );
+    let mut t = Terminal::new(TestBackend::new(140, 8)).unwrap();
+    t.draw(|f| view.render(f, f.area(), &theme::get(theme::DEFAULT_ID), ""))
+        .unwrap();
+    let text = buf_text(&t);
+    assert!(text.contains("BackOff"), "{text}");
+    assert!(text.contains("pod/crasher"), "{text}");
+    assert!(
+        text.contains("Back-off restarting failed container"),
+        "{text}"
+    );
+}

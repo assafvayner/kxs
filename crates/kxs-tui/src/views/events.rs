@@ -263,11 +263,6 @@ impl View for EventsView {
         };
         let visible = self.visible();
         let type_col = column_index(&t.columns, "Type");
-        let widths: Vec<u16> = t
-            .columns
-            .iter()
-            .map(|c| (c.chars().count() as u16).max(6))
-            .collect();
         let now_ms = kxs_cluster::clock::now_ms();
         let age_col = column_index(&t.columns, "Age");
         let rows = visible.iter().map(|r| {
@@ -300,7 +295,31 @@ impl View for EventsView {
                 Style::new()
             })
         });
-        let constraints: Vec<Constraint> = widths.iter().map(|w| Constraint::Length(*w)).collect();
+        let message_col = column_index(&t.columns, "Message");
+        let constraints: Vec<Constraint> = t
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                if i as i32 == message_col {
+                    return Constraint::Fill(1);
+                }
+                let widest = visible
+                    .iter()
+                    .map(|r| {
+                        if i as i32 == age_col {
+                            kxs_core::format::age(r.created.as_deref(), now_ms)
+                                .chars()
+                                .count()
+                        } else {
+                            r.cells.get(i).map_or(0, |s| s.chars().count())
+                        }
+                    })
+                    .max()
+                    .unwrap_or(0);
+                Constraint::Length(c.chars().count().max(widest).min(40) as u16)
+            })
+            .collect();
         let table = Table::new(rows, constraints)
             .header(Row::new(t.columns.clone()).style(Style::new().fg(th.colors.fg_dim).bold()))
             .block(block);
