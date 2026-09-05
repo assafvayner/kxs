@@ -230,7 +230,9 @@ impl View for LogsView {
 
     fn title(&self) -> String {
         let what = if self.multi() {
-            format!("{} pods", self.targets.len())
+            let pods: std::collections::HashSet<&str> =
+                self.targets.iter().map(|t| t.pod.as_str()).collect();
+            format!("{} pods", pods.len())
         } else {
             self.targets
                 .first()
