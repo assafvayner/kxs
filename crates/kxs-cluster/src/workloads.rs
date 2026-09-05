@@ -40,6 +40,62 @@ pub async fn workload_pods(
     Ok(names)
 }
 
+/// Labels a CronJob puts on its pods: the Job's pod template labels, falling
+/// back to the Job template's own metadata labels.
+pub fn cronjob_pod_labels(cj: &CronJob) -> Option<std::collections::BTreeMap<String, String>> {
+    let jt = &cj.spec.as_ref()?.job_template;
+    let from_pod = jt
+        .spec
+        .as_ref()
+        .and_then(|s| s.template.metadata.as_ref())
+        .and_then(|m| m.labels.clone())
+        .filter(|l| !l.is_empty());
+    from_pod.or_else(|| {
+        jt.metadata
+            .as_ref()
+            .and_then(|m| m.labels.clone())
+            .filter(|l| !l.is_empty())
+    })
+}
+
+/// The label selector string of a workload ("k1=v1,k2=v2"), for driving a pod
+/// watch from a pod-owner row. For a CronJob the pod template labels are used
+/// (see `cronjob_pod_labels`). Errors when there is no usable selector.
+pub async fn workload_selector(
+    client: Client,
+    group: &str,
+    version: &str,
+    kind: &str,
+    plural: &str,
+    namespace: &str,
+    name: &str,
+) -> Result<String, String> {
+    if kind == "CronJob" {
+        let api: Api<CronJob> = Api::namespaced(client, namespace);
+        let cj = api
+            .get_opt(name)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("CronJob \"{name}\" not found"))?;
+        let labels = cronjob_pod_labels(&cj)
+            .ok_or_else(|| format!("CronJob \"{name}\" has no pod labels"))?;
+        let mut parts: Vec<String> = labels
+            .into_iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        parts.sort();
+        return Ok(parts.join(","));
+    }
+    let ar = crate::resources::api_resource(group, version, kind, plural);
+    let api: Api<DynamicObject> = Api::namespaced_with(client, namespace, &ar);
+    let obj = api
+        .get_opt(name)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("{kind} \"{name}\" not found"))?;
+    selector_from_spec(&obj.data).ok_or_else(|| format!("{kind} \"{name}\" has no label selector"))
+}
+
 /// "k1=v1,k2=v2" from `.spec.selector.matchLabels`, or from a bare label map
 /// (`.spec.selector` on Services). None when there is no usable label map.
 fn selector_from_spec(data: &serde_json::Value) -> Option<String> {
@@ -301,6 +357,44 @@ fn manual_job_name(cronjob: &str, ts: u64) -> String {
     format!("{}{suffix}", base.trim_end_matches('-'))
 }
 
+/// Declared `spec.ports[].port` values of a Service with a label per port
+/// (the port name, else its targetPort).
+pub fn service_port_list(svc: &Service) -> Vec<(u16, String)> {
+    svc.spec
+        .as_ref()
+        .and_then(|s| s.ports.clone())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|p| {
+            let port = u16::try_from(p.port).ok()?;
+            let label = match (&p.name, &p.target_port) {
+                (Some(n), _) => n.clone(),
+                (None, Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(t))) => {
+                    format!("-> {t}")
+                }
+                (
+                    None,
+                    Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::String(t)),
+                ) => {
+                    format!("-> {t}")
+                }
+                (None, None) => String::new(),
+            };
+            Some((port, label))
+        })
+        .collect()
+}
+
+pub async fn service_ports(
+    client: Client,
+    namespace: &str,
+    service: &str,
+) -> Result<Vec<(u16, String)>, String> {
+    let svcs: Api<Service> = Api::namespaced(client, namespace);
+    let svc = svcs.get(service).await.map_err(|e| e.to_string())?;
+    Ok(service_port_list(&svc))
+}
+
 /// Resolve a Service port to a ready backing (pod, containerPort) via its
 /// Endpoints — the target `kubectl port-forward svc/<name>` would pick.
 pub async fn resolve_service_endpoint(
@@ -428,6 +522,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn service_port_list_reads_ports_and_names() {
+        let svc: Service = serde_json::from_value(json!({
+            "metadata": {"name": "web"},
+            "spec": {"ports": [{"port": 8080, "name": "http", "targetPort": "http"}, {"port": 9090}]}
+        }))
+        .unwrap();
+        let ports = service_port_list(&svc);
+        assert_eq!(ports[0], (8080, "http".to_string()));
+        assert_eq!(ports[1].0, 9090);
+    }
+
+    #[test]
     fn selector_from_match_labels() {
         let spec = json!({"spec": {"selector": {"matchLabels": {"app": "web", "tier": "fe"}}}});
         assert_eq!(
@@ -450,6 +556,35 @@ mod tests {
         assert_eq!(
             selector_from_spec(&json!({"spec": {"selector": {"matchLabels": {}}}})),
             None
+        );
+    }
+
+    #[test]
+    fn cronjob_pod_labels_prefers_pod_template() {
+        let cj: CronJob = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "tick"},
+            "spec": {"schedule": "* * * * *", "jobTemplate": {
+                "metadata": {"labels": {"job": "x"}},
+                "spec": {"template": {"metadata": {"labels": {"app": "tick"}}, "spec": {"containers": []}}}
+            }}
+        }))
+        .unwrap();
+        let labels = cronjob_pod_labels(&cj).unwrap();
+        assert_eq!(labels.get("app").map(String::as_str), Some("tick"));
+        let cj2: CronJob = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "tick"},
+            "spec": {"schedule": "* * * * *", "jobTemplate": {
+                "metadata": {"labels": {"job": "x"}},
+                "spec": {"template": {"spec": {"containers": []}}}
+            }}
+        }))
+        .unwrap();
+        assert_eq!(
+            cronjob_pod_labels(&cj2)
+                .unwrap()
+                .get("job")
+                .map(String::as_str),
+            Some("x")
         );
     }
 

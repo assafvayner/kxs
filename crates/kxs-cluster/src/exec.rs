@@ -27,7 +27,7 @@ pub struct ExecHandle {
     pub stop: tokio::sync::oneshot::Sender<()>,
 }
 
-/// Attach `command` (e.g. ["/bin/sh"]) in `pod`/`container`, streaming merged
+/// Run `command` (e.g. ["/bin/sh"]) in `pod`/`container`, streaming merged
 /// output to `send` (base64). Returns a handle for stdin/resize/stop.
 #[allow(clippy::too_many_arguments)]
 pub async fn exec(
@@ -41,15 +41,48 @@ pub async fn exec(
     send: impl Fn(ExecEvent) -> bool + Send + Sync + 'static,
 ) -> Result<ExecHandle, String> {
     let api: Api<Pod> = Api::namespaced(client, namespace);
-    let mut ap = AttachParams::interactive_tty();
-    if let Some(c) = container {
-        ap = ap.container(c.to_string());
-    }
-    let mut proc: AttachedProcess = api
-        .exec(pod, command, &ap)
+    let proc = api
+        .exec(pod, command, &attach_params(container))
         .await
         .map_err(|e| e.to_string())?;
+    drive(proc, cols, rows, send).await
+}
 
+/// Attach to the container's already-running process (kubectl attach), rather
+/// than starting a new one. Same streaming contract as `exec`.
+pub async fn attach(
+    client: Client,
+    namespace: &str,
+    pod: &str,
+    container: Option<&str>,
+    cols: u16,
+    rows: u16,
+    send: impl Fn(ExecEvent) -> bool + Send + Sync + 'static,
+) -> Result<ExecHandle, String> {
+    let api: Api<Pod> = Api::namespaced(client, namespace);
+    let proc = api
+        .attach(pod, &attach_params(container))
+        .await
+        .map_err(|e| e.to_string())?;
+    drive(proc, cols, rows, send).await
+}
+
+fn attach_params(container: Option<&str>) -> AttachParams {
+    let ap = AttachParams::interactive_tty();
+    match container {
+        Some(c) => ap.container(c.to_string()),
+        None => ap,
+    }
+}
+
+/// Pumps an attached process' streams onto `send` and returns the control
+/// handle; shared by `exec` and `attach`.
+async fn drive(
+    mut proc: AttachedProcess,
+    cols: u16,
+    rows: u16,
+    send: impl Fn(ExecEvent) -> bool + Send + Sync + 'static,
+) -> Result<ExecHandle, String> {
     let mut out = proc.stdout().ok_or("no stdout from exec")?;
     let mut stdin_writer = proc.stdin().ok_or("no stdin from exec")?;
     let mut resize_writer = proc.terminal_size();
@@ -74,6 +107,11 @@ pub async fn exec(
     // parking until the next stdout write or an explicit stop.
     let sink_closed = std::sync::Arc::new(tokio::sync::Notify::new());
 
+    // Stdout EOF: the remote command exited. The control loop waits briefly for
+    // the status future so the exit message is reported exactly once.
+    let stdout_eof = std::sync::Arc::new(tokio::sync::Notify::new());
+    let stdout_eof_pump = stdout_eof.clone();
+
     // stdout pump -> send (base64)
     let send = std::sync::Arc::new(send);
     let send_out = send.clone();
@@ -82,7 +120,10 @@ pub async fn exec(
         let mut buf = [0u8; 8192];
         loop {
             match out.read(&mut buf).await {
-                Ok(0) => break,
+                Ok(0) => {
+                    stdout_eof_pump.notify_one();
+                    break;
+                }
                 Ok(n) => {
                     let data = BASE64.encode(&buf[..n]);
                     if !send_out(ExecEvent::Output { data }) {
@@ -90,7 +131,10 @@ pub async fn exec(
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(_) => {
+                    stdout_eof_pump.notify_one();
+                    break;
+                }
             }
         }
     });
@@ -98,6 +142,7 @@ pub async fn exec(
     // control loop: stdin, resize, stop, and completion (status taken exactly once above)
     let send_end = send.clone();
     let sink_closed_ctrl = sink_closed.clone();
+    let stdout_eof_ctrl = stdout_eof.clone();
     tokio::spawn(async move {
         tokio::pin!(status_fut);
         let mut stdin_open = true;
@@ -115,6 +160,22 @@ pub async fn exec(
                     // leaking the websocket until the next stdout write.
                     proc.abort();
                     let _ = send_end(ExecEvent::Closed { message: None });
+                    break;
+                }
+                _ = stdout_eof_ctrl.notified() => {
+                    // The remote command exited; give the status future a short
+                    // window so the exit message lands on the single Closed event.
+                    let msg = match tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        &mut status_fut,
+                    )
+                    .await
+                    {
+                        Ok(status) => status.and_then(|s| s.message.or(s.reason)),
+                        Err(_) => None,
+                    };
+                    proc.abort();
+                    let _ = send_end(ExecEvent::Closed { message: msg });
                     break;
                 }
                 msg = stdin_rx.recv(), if stdin_open => {

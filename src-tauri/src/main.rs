@@ -3,10 +3,10 @@
 mod cluster_ipc;
 mod ipc;
 mod shell_env;
-mod watcher;
 
 use kxs_core::kubeconfig::paths::kubeconfig_paths;
 use kxs_core::kubeconfig::store::KubeconfigStore;
+use tauri::{Emitter, Manager};
 
 fn main() {
     // Restore the user's real PATH before anything spawns exec-auth helpers
@@ -70,7 +70,17 @@ fn main() {
             cluster_ipc::node_metrics
         ])
         .setup(move |app| {
-            watcher::spawn(app.handle().clone(), paths);
+            let handle = app.handle().clone();
+            kxs_core::watch::spawn_watcher(paths, move || {
+                let state = handle.state::<ipc::AppState>();
+                if let Ok(mut store) = state.store.lock() {
+                    let fresh_warnings = store.reload();
+                    if let Ok(mut warnings) = state.warnings.lock() {
+                        *warnings = fresh_warnings;
+                    }
+                }
+                let _ = handle.emit("kubeconfig://changed", ());
+            });
             Ok(())
         })
         .run(tauri::generate_context!())
