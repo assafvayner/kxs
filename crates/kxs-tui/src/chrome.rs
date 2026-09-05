@@ -36,6 +36,7 @@ impl PromptKind {
 pub struct Prompt {
     pub kind: PromptKind,
     pub input: Input,
+    pub completion: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -164,11 +165,18 @@ impl Chrome {
         self.prompt = Some(Prompt {
             kind,
             input: Input::default(),
+            completion: None,
         });
     }
 
     pub fn close_prompt(&mut self) {
         self.prompt = None;
+    }
+
+    pub fn set_completion(&mut self, c: Option<String>) {
+        if let Some(p) = &mut self.prompt {
+            p.completion = c;
+        }
     }
 
     pub fn open_pick(&mut self, title: String, options: Vec<(String, String)>, for_view: ViewId) {
@@ -324,6 +332,19 @@ impl Chrome {
         let Some(prompt) = &mut self.prompt else {
             return PromptOutcome::Ignored;
         };
+        if key.code == KeyCode::Tab {
+            if let Some(c) = prompt.completion.clone() {
+                let rest: String = prompt
+                    .input
+                    .value()
+                    .split_once(' ')
+                    .map(|(_, r)| format!(" {r}"))
+                    .unwrap_or_default();
+                prompt.input = Input::new(format!("{c}{rest}"));
+                return PromptOutcome::Edited;
+            }
+            return PromptOutcome::Ignored;
+        }
         let req = match key.code {
             KeyCode::Enter => return PromptOutcome::Submit(prompt.input.value().to_string()),
             KeyCode::Esc => return PromptOutcome::Cancel,
@@ -722,6 +743,15 @@ impl Chrome {
         if vis_cursor >= shown.chars().count() {
             spans.push(Span::styled(shown, Style::new().fg(th.colors.fg)));
             spans.push(Span::styled("█", Style::new().fg(th.colors.accent)));
+            if let Some(c) = &prompt.completion {
+                let head = input.split_whitespace().next().unwrap_or("");
+                if !head.is_empty() && !input.contains(' ') && c.starts_with(head) && c != head {
+                    spans.push(Span::styled(
+                        c[head.len()..].to_string(),
+                        Style::new().fg(th.colors.fg_dim),
+                    ));
+                }
+            }
         } else {
             let chars: Vec<char> = shown.chars().collect();
             let (before, at) = chars.split_at(vis_cursor);

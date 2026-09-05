@@ -958,7 +958,24 @@ impl App {
 
     fn prompt_key(&mut self, key: KeyEvent) -> Vec<Cmd> {
         match self.chrome.prompt_key(key) {
-            PromptOutcome::Ignored | PromptOutcome::Edited => vec![],
+            PromptOutcome::Ignored => vec![],
+            PromptOutcome::Edited => {
+                if self.chrome.prompt.as_ref().map(|p| p.kind) == Some(PromptKind::Command) {
+                    let text = self
+                        .chrome
+                        .prompt
+                        .as_ref()
+                        .map(|p| p.input.value().to_string())
+                        .unwrap_or_default();
+                    let first = if text.is_empty() {
+                        None
+                    } else {
+                        self.completions(&text).into_iter().next()
+                    };
+                    self.chrome.set_completion(first);
+                }
+                vec![]
+            }
             PromptOutcome::Cancel => {
                 self.chrome.close_prompt();
                 vec![]
@@ -1693,6 +1710,21 @@ mod tests {
             Arc::new(Mutex::new(Config::default())),
             crate::theme::get(crate::theme::DEFAULT_ID),
         )
+    }
+
+    #[test]
+    fn tab_completes_the_command_head() {
+        let mut app = test_app();
+        let view = Box::new(crate::views::help::HelpView::new(&mut app));
+        app.push_view(view);
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Char(':'))));
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Char('c'))));
+        assert_eq!(
+            app.chrome.prompt.as_ref().unwrap().completion.as_deref(),
+            Some("ctx")
+        );
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Tab)));
+        assert_eq!(app.chrome.prompt.as_ref().unwrap().input.value(), "ctx");
     }
 
     #[test]
