@@ -8,7 +8,7 @@ name = "kxs"
 path = "src/main.rs"
 
 [dependencies]
-kxs-core = { path = "../kxs-core", features = ["watch"] }
+kxs-core = { path = "../kxs-core", features = ["watch", "theme"] }
 kxs-cluster = { path = "../kxs-cluster" }
 ratatui = "0.30.2"
 crossterm = "0.29.0"

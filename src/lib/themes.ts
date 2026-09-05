@@ -35,7 +35,7 @@ export interface Theme {
 export const DEFAULT_THEME_ID = "tokyo-night";
 
 /** Palette data lives in /themes.json, shared with the Rust TUI (kxs_core::theme). */
-const ALL = palettes as unknown as Theme[];
+const ALL: Theme[] = palettes;
 
 export const THEMES: Record<string, Theme> = Object.fromEntries(ALL.map((t) => [t.id, t]));
 

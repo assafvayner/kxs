@@ -280,7 +280,8 @@ async fn run_session(
 }
 
 /// The `e` edit flow, run with the TUI suspended: fetch YAML, write a temp
-/// file, hand it to $KUBE_EDITOR/$EDITOR/vi, apply on save. Server errors are
+/// file, hand it to the configured editor (else $KUBE_EDITOR/$EDITOR/vi),
+/// apply on save. Server errors are
 /// prepended as `# ` comments and the editor reopens (kubectl behavior).
 /// `Ok(None)` means "no changes".
 pub async fn run_edit(
@@ -288,6 +289,7 @@ pub async fn run_edit(
     kind: ResourceKind,
     ns: Option<String>,
     name: String,
+    editor: Option<String>,
 ) -> Result<Option<String>, String> {
     let yaml = kxs_cluster::resources::get_yaml(
         client.clone(),
@@ -301,18 +303,24 @@ pub async fn run_edit(
     .await?;
     // NamedTempFile creates the file atomically with restrictive permissions
     // and removes it on every return path, including editor/read failures.
-    let mut file = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+    let mut file = tempfile::Builder::new()
+        .prefix(&format!("kxs-{}-{}-", kind.plural, name))
+        .suffix(".yaml")
+        .tempfile()
+        .map_err(|e| e.to_string())?;
     use std::os::unix::fs::PermissionsExt;
     file.as_file()
         .set_permissions(std::fs::Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())?;
     let path = file.path().to_path_buf();
     let mut current = yaml.clone();
+    let editor = editor
+        .filter(|e| !e.trim().is_empty())
+        .or_else(|| std::env::var("KUBE_EDITOR").ok())
+        .or_else(|| std::env::var("EDITOR").ok())
+        .unwrap_or_else(|| "vi".into());
     let outcome = loop {
         write_secret_file(&mut file, &current)?;
-        let editor = std::env::var("KUBE_EDITOR")
-            .or_else(|_| std::env::var("EDITOR"))
-            .unwrap_or_else(|_| "vi".into());
         // shell form so editors with arguments ("code -w") work
         let status = std::process::Command::new("sh")
             .arg("-c")

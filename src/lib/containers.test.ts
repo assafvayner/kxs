@@ -13,6 +13,7 @@ function c(
     restarts: 0,
     ports: [],
     initContainer: false,
+    sidecar: false,
     ...opts,
   };
 }

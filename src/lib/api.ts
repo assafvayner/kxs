@@ -123,6 +123,7 @@ export interface ContainerInfo {
   restarts: number;
   ports: ContainerPortInfo[];
   initContainer: boolean;
+  sidecar: boolean;
 }
 
 export interface ResourceKind {

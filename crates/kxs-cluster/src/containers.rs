@@ -15,12 +15,13 @@ pub struct PortChoice {
     pub label: String,
 }
 
-/// Containers a shell can attach to: init containers have already terminated by
-/// the time a pod runs, so they are never exec targets.
+/// Containers a shell can attach to: plain init containers have already
+/// terminated by the time a pod runs, so they are never exec targets. Native
+/// sidecars (`restartPolicy: Always` init containers) keep running, so they are.
 pub fn exec_containers(infos: &[ContainerInfo]) -> Vec<ContainerInfo> {
     infos
         .iter()
-        .filter(|c| !c.init_container)
+        .filter(|c| !c.init_container || c.sidecar)
         .cloned()
         .collect()
 }
@@ -93,6 +94,7 @@ mod tests {
                 })
                 .collect(),
             init_container: init,
+            sidecar: false,
         }
     }
 
@@ -106,6 +108,30 @@ mod tests {
         let execed = exec_containers(&infos);
         let names: Vec<&str> = execed.iter().map(|x| x.name.as_str()).collect();
         assert_eq!(names, vec!["web", "sidecar"]);
+    }
+
+    #[test]
+    fn sidecars_are_exec_targets() {
+        let mk = |name: &str, init: bool, sidecar: bool| ContainerInfo {
+            name: name.into(),
+            image: "x".into(),
+            ready: true,
+            state: "running".into(),
+            restarts: 0,
+            ports: vec![],
+            init_container: init,
+            sidecar,
+        };
+        let infos = vec![
+            mk("init", true, false),
+            mk("proxy", true, true),
+            mk("app", false, false),
+        ];
+        let names: Vec<String> = exec_containers(&infos)
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, vec!["proxy", "app"]);
     }
 
     #[test]

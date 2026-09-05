@@ -173,6 +173,9 @@ pub struct ContainerInfo {
     pub restarts: i32,
     pub ports: Vec<ContainerPortInfo>,
     pub init_container: bool,
+    /// A native sidecar: an init container with `restartPolicy: Always`, so it
+    /// keeps running alongside the regular containers.
+    pub sidecar: bool,
 }
 
 /// Per-container spec+status view, init containers first (same order as
@@ -216,6 +219,7 @@ pub fn container_infos(pod: &Pod) -> Vec<ContainerInfo> {
                 })
                 .collect(),
             init_container: init,
+            sidecar: init && c.restart_policy.as_deref() == Some("Always"),
         }
     };
     let init_statuses = status.and_then(|s| s.init_container_statuses.as_deref());

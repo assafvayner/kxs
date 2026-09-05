@@ -1587,6 +1587,7 @@ fn containers_target_matches_display_order() {
         restarts: 0,
         ports: vec![],
         init_container: init,
+        sidecar: false,
     };
     view.on_msg(
         &Msg::Fetched {

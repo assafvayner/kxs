@@ -370,7 +370,9 @@ impl Runtime {
                     let result = match client {
                         Some(client) => match action {
                             SuspendAction::Edit { kind, ns, name } => {
-                                crate::suspend::run_edit(client, kind, ns, name).await
+                                let editor =
+                                    self.config.lock().expect("config lock").editor.clone();
+                                crate::suspend::run_edit(client, kind, ns, name, Some(editor)).await
                             }
                             SuspendAction::Exec { ns, pod, container } => {
                                 let size = crossterm::terminal::size().unwrap_or((80, 24));
@@ -402,13 +404,14 @@ impl Runtime {
                         None => Err("not connected".into()),
                     };
                     terminal::enter().ok();
-                    // Restart the pump thread, then discard anything it
-                    // (or the kernel tty buffer) picked up during the
-                    // suspend window so none of it replays into the TUI.
-                    self.start_event_pump();
+                    // Discard anything the kernel tty buffer picked up during
+                    // the suspend window so none of it replays into the TUI,
+                    // then restart the pump thread: only one reader touches
+                    // the tty at a time.
                     while crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
                         let _ = crossterm::event::read();
                     }
+                    self.start_event_pump();
                     while let Ok(m) = rx.try_recv() {
                         if matches!(m, Msg::Key(_)) {
                             continue;
@@ -632,39 +635,50 @@ impl Runtime {
                     return Ok(false);
                 };
                 let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-                let started =
-                    kxs_cluster::portforward::start(client, ns.clone(), pod.clone(), port, stop_rx)
-                        .await;
-                match started {
-                    Ok((local_port, _handle)) => {
-                        let id = {
-                            let mut s = self.sessions.lock().expect("sessions lock");
-                            let id = s.next_forward_id();
-                            s.add_forward(crate::sessions::Forward {
+                // binding the local port can block on a slow apiserver: keep
+                // it off the UI loop so the TUI stays responsive
+                let tx = self.tx.clone();
+                let sessions = self.sessions.clone();
+                tokio::spawn(async move {
+                    let started = kxs_cluster::portforward::start(
+                        client,
+                        ns.clone(),
+                        pod.clone(),
+                        port,
+                        stop_rx,
+                    )
+                    .await;
+                    match started {
+                        Ok((local_port, _handle)) => {
+                            let id = {
+                                let mut s = sessions.lock().expect("sessions lock");
+                                let id = s.next_forward_id();
+                                s.add_forward(crate::sessions::Forward {
+                                    id,
+                                    ns: ns.clone(),
+                                    pod: pod.clone(),
+                                    container: None,
+                                    pod_port: port,
+                                    local_port,
+                                    started: std::time::Instant::now(),
+                                    stop: Some(stop_tx),
+                                });
+                                id
+                            };
+                            let _ = tx.send(Msg::ForwardStarted {
+                                view,
                                 id,
-                                ns: ns.clone(),
-                                pod: pod.clone(),
-                                container: None,
-                                pod_port: port,
                                 local_port,
-                                started: std::time::Instant::now(),
-                                stop: Some(stop_tx),
                             });
-                            id
-                        };
-                        let _ = self.tx.send(Msg::ForwardStarted {
-                            view,
-                            id,
-                            local_port,
-                        });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Msg::Error {
+                                view: Some(view),
+                                text: format!("port-forward: {e}"),
+                            });
+                        }
                     }
-                    Err(e) => {
-                        let _ = self.tx.send(Msg::Error {
-                            view: Some(view),
-                            text: format!("port-forward: {e}"),
-                        });
-                    }
-                }
+                });
                 Ok(false)
             }
             Cmd::StopForward { id } => {

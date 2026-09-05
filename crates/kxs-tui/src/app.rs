@@ -60,6 +60,8 @@ pub struct App {
     history_pos: usize,
     /// `--readonly`: in-memory only, never serialized with the config.
     readonly_override: bool,
+    /// `<kind> @ctx`: the kind command to run once the new session connects.
+    pending_command: Option<String>,
 }
 
 impl App {
@@ -79,6 +81,7 @@ impl App {
             history: Vec::new(),
             history_pos: 0,
             readonly_override: false,
+            pending_command: None,
         }
     }
 
@@ -569,12 +572,22 @@ impl App {
                 self.chrome.flash(format!("connected: {context}"), false);
                 let landing = self.landing_view();
                 let mut cmds = self.replace_views(vec![landing]);
-                let ns_view = Box::new(crate::views::namespaces::NamespacesView::new(self));
-                cmds.extend(self.push_view(ns_view));
+                // `<kind> @ctx` deferred the kind until the session was up;
+                // it replaces the stack itself, so skip the Namespaces push
+                match self.pending_command.take() {
+                    Some(pending) => cmds.extend(self.handle_command(&pending)),
+                    None => {
+                        let ns_view = Box::new(crate::views::namespaces::NamespacesView::new(self));
+                        cmds.extend(self.push_view(ns_view));
+                    }
+                }
                 cmds.push(self.poll_metrics_cmd());
                 cmds
             }
             Err(text) => {
+                // drop any `<kind> @ctx` follow-up so it cannot fire on a
+                // later, unrelated connect
+                self.pending_command = None;
                 self.chrome
                     .flash(format!("connect {context}: {text}"), true);
                 if self.views.is_empty() {
@@ -1037,20 +1050,25 @@ impl App {
         let mut ns: Option<String> = None;
         let mut filter: Option<String> = None;
         let mut context: Option<String> = None;
+        let mut rest: Vec<String> = Vec::new();
         for arg in args {
-            if let Some(rest) = arg.strip_prefix('@') {
-                context = Some(rest.to_string());
-            } else if let Some(rest) = arg.strip_prefix('/') {
-                filter = Some(rest.to_string());
+            if let Some(ctx) = arg.strip_prefix('@') {
+                context = Some(ctx.to_string());
+                continue;
+            }
+            if let Some(f) = arg.strip_prefix('/') {
+                filter = Some(f.to_string());
             } else if arg.contains('=') {
                 filter = Some(format!("-l {arg}"));
             } else {
-                ns = Some(arg);
+                ns = Some(arg.clone());
             }
+            rest.push(arg);
         }
         // `@ctx` switches the session first; the kind is resolved against the
         // new cluster's discovery once it is connected
         if let Some(context) = context {
+            self.pending_command = Some(format!("{head} {}", rest.join(" ")));
             return vec![Cmd::Connect { context }];
         }
         let kinds = self.ctx().kinds;
