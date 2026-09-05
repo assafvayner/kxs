@@ -59,8 +59,8 @@ pub fn cronjob_pod_labels(cj: &CronJob) -> Option<std::collections::BTreeMap<Str
 }
 
 /// The label selector string of a workload ("k1=v1,k2=v2"), for driving a pod
-/// watch from a pod-owner row. For a CronJob the Job template's metadata labels
-/// are used (Job pods inherit them). Errors when there is no usable selector.
+/// watch from a pod-owner row. For a CronJob the pod template labels are used
+/// (see `cronjob_pod_labels`). Errors when there is no usable selector.
 pub async fn workload_selector(
     client: Client,
     group: &str,

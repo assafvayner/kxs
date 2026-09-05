@@ -175,6 +175,12 @@ impl LogsView {
         } else {
             None
         };
+        // keep a paused view anchored on the same lines as new ones arrive
+        let added = if self.autoscroll {
+            0
+        } else {
+            lines.iter().filter(|l| self.line_matches(l)).count()
+        };
         for l in lines {
             if self.lines.len() == RING_CAPACITY {
                 self.lines.pop_front();
@@ -183,6 +189,7 @@ impl LogsView {
             self.lines.push_back(l.clone());
             self.prefixes.push_back(prefix.clone());
         }
+        self.scroll_from_end += added;
     }
 
     fn pod_prefix_color(pod: &str, th: &Theme) -> ratatui::style::Color {

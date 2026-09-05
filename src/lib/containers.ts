@@ -14,7 +14,7 @@ export interface PortChoice {
 /** Containers a shell can attach to: init containers have already terminated by
  * the time a pod runs, so they are never exec targets. */
 export function execContainers(infos: ContainerInfo[]): ContainerInfo[] {
-  return infos.filter((c) => !c.initContainer);
+  return infos.filter((c) => !c.initContainer || c.sidecar);
 }
 
 export function containerOptions(infos: ContainerInfo[]): PickOption[] {

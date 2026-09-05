@@ -1713,3 +1713,52 @@ fn modals_render_in_a_25_column_terminal() {
         .open_pick("Exec".into(), vec![("a".into(), "b".into())], 1);
     t.draw(|f| app.render(f)).unwrap();
 }
+
+#[test]
+fn paused_logs_stay_anchored_when_new_lines_arrive() {
+    use kxs_tui::views::logs::LogsView;
+    let mut app = test_app();
+    let mut view = LogsView::new_with_container(&mut app, {
+        let mut t = pod_target();
+        t.container = Some("c".into());
+        t
+    });
+    let ctx = app.ctx();
+    let id = view.id();
+    let lines: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+    view.on_msg(
+        &Msg::LogLines {
+            view: id,
+            pod: "web".into(),
+            lines,
+        },
+        &ctx,
+    );
+    let mut t = Terminal::new(TestBackend::new(60, 12)).unwrap();
+    t.draw(|f| view.render(f, f.area(), &theme::get(theme::DEFAULT_ID), ""))
+        .unwrap();
+    view.handle_key(KeyEvent::from(KeyCode::Char('k')), &ctx);
+    t.draw(|f| view.render(f, f.area(), &theme::get(theme::DEFAULT_ID), ""))
+        .unwrap();
+    let before = buf_text(&t);
+    assert!(
+        before.contains("line 48") && !before.contains("line 49"),
+        "{before}"
+    );
+    let more: Vec<String> = (50..55).map(|i| format!("line {i}")).collect();
+    view.on_msg(
+        &Msg::LogLines {
+            view: id,
+            pod: "web".into(),
+            lines: more,
+        },
+        &ctx,
+    );
+    t.draw(|f| view.render(f, f.area(), &theme::get(theme::DEFAULT_ID), ""))
+        .unwrap();
+    let after = buf_text(&t);
+    assert!(
+        after.contains("line 48") && !after.contains("line 49"),
+        "{after}"
+    );
+}
