@@ -1518,13 +1518,71 @@ fn workload_logs_use_the_workload_namespace() {
         },
         &ctx,
     );
+    // one container lookup per pod, in the workload's namespace
     assert_eq!(cmds.len(), 2);
-    for c in cmds {
+    for c in &cmds {
         match c {
-            Cmd::StartLogs { req, .. } => assert_eq!(req.namespace, "kxs-review"),
-            _ => panic!("expected StartLogs"),
+            Cmd::Fetch {
+                what: kxs_tui::cmd::Fetch::ExecTargets { ns, .. },
+                ..
+            } => {
+                assert_eq!(ns, "kxs-review")
+            }
+            _ => panic!("expected a container lookup"),
         }
     }
+    // each pod streams every regular container, named
+    let info = |name: &str| kxs_cluster::pods::ContainerInfo {
+        name: name.into(),
+        image: "x".into(),
+        ready: true,
+        state: "running".into(),
+        restarts: 0,
+        ports: vec![],
+        init_container: false,
+        sidecar: false,
+    };
+    let cmds = view.on_msg(
+        &Msg::Fetched {
+            view: id,
+            result: Ok(FetchResult::ExecContainers {
+                ns: "kxs-review".into(),
+                pod: "web-1".into(),
+                infos: vec![info("nginx"), info("sidecar")],
+            }),
+        },
+        &ctx,
+    );
+    let streams: Vec<(String, Option<String>)> = cmds
+        .iter()
+        .map(|c| match c {
+            Cmd::StartLogs { req, .. } => {
+                assert_eq!(req.namespace, "kxs-review");
+                (req.pod.clone(), req.container.clone())
+            }
+            _ => panic!("expected StartLogs"),
+        })
+        .collect();
+    assert_eq!(
+        streams,
+        vec![
+            ("web-1".to_string(), Some("nginx".to_string())),
+            ("web-1".to_string(), Some("sidecar".to_string())),
+        ]
+    );
+    // the second pod adds only its own streams
+    let cmds = view.on_msg(
+        &Msg::Fetched {
+            view: id,
+            result: Ok(FetchResult::ExecContainers {
+                ns: "kxs-review".into(),
+                pod: "web-2".into(),
+                infos: vec![info("nginx")],
+            }),
+        },
+        &ctx,
+    );
+    assert_eq!(cmds.len(), 1);
 }
 
 #[test]

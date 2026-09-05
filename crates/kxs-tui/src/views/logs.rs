@@ -128,12 +128,19 @@ impl LogsView {
     }
 
     fn start_streams(&mut self) -> Vec<Cmd> {
+        self.stream_cmds(0)
+    }
+
+    /// `StartLogs` for the targets from index `from` on (all of them for a
+    /// fresh start; only the new ones when a workload's pods arrive piecemeal).
+    fn stream_cmds(&self, from: usize) -> Vec<Cmd> {
         let (tail, since) = log_window(
             SINCE_OPTIONS[self.since_idx].seconds,
             default_tail(self.multi()),
         );
         self.targets
             .iter()
+            .skip(from)
             .map(|t| Cmd::StartLogs {
                 view: self.id,
                 req: LogRequest {
@@ -419,15 +426,32 @@ impl View for LogsView {
                     self.start_streams()
                 }
                 Ok(crate::cmd::FetchResult::PodNames(names)) => {
-                    self.targets = names
+                    // a workload's pods may have several containers and the
+                    // logs API needs one named: resolve each pod's containers
+                    self.targets.clear();
+                    names
                         .iter()
-                        .map(|pod| LogTarget {
-                            ns: self.ns.clone(),
-                            pod: pod.clone(),
-                            container: None,
+                        .map(|pod| Cmd::Fetch {
+                            view: self.id,
+                            what: Fetch::ExecTargets {
+                                ns: self.ns.clone(),
+                                pod: pod.clone(),
+                            },
                         })
-                        .collect();
-                    self.start_streams()
+                        .collect()
+                }
+                Ok(crate::cmd::FetchResult::ExecContainers { pod, infos, .. }) => {
+                    let from = self.targets.len();
+                    self.targets.extend(
+                        kxs_cluster::containers::exec_containers(infos)
+                            .iter()
+                            .map(|c| LogTarget {
+                                ns: self.ns.clone(),
+                                pod: pod.clone(),
+                                container: Some(c.name.clone()),
+                            }),
+                    );
+                    self.stream_cmds(from)
                 }
                 Err(e) => {
                     self.pending_pick = false;
