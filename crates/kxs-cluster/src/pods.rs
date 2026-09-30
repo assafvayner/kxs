@@ -168,9 +168,14 @@ pub struct ContainerInfo {
     pub name: String,
     pub image: String,
     pub ready: bool,
+    /// Container state: "running", "waiting", "terminated", or "" when unknown.
+    pub state: String,
     pub restarts: i32,
     pub ports: Vec<ContainerPortInfo>,
     pub init_container: bool,
+    /// A native sidecar: an init container with `restartPolicy: Always`, so it
+    /// keeps running alongside the regular containers.
+    pub sidecar: bool,
 }
 
 /// Per-container spec+status view, init containers first (same order as
@@ -182,10 +187,24 @@ pub fn container_infos(pod: &Pod) -> Vec<ContainerInfo> {
     let status = pod.status.as_ref();
     let one = |c: &Container, init: bool, statuses: Option<&[ContainerStatus]>| {
         let st = statuses.and_then(|v| v.iter().find(|s| s.name == c.name));
+        let state = st
+            .and_then(|s| {
+                s.state.as_ref().map(|s| {
+                    if s.running.is_some() {
+                        "running"
+                    } else if s.terminated.is_some() {
+                        "terminated"
+                    } else {
+                        "waiting"
+                    }
+                })
+            })
+            .unwrap_or("");
         ContainerInfo {
             name: c.name.clone(),
             image: c.image.clone().unwrap_or_default(),
             ready: st.map(|s| s.ready).unwrap_or(false),
+            state: state.into(),
             restarts: st.map(|s| s.restart_count).unwrap_or(0),
             ports: c
                 .ports
@@ -200,6 +219,7 @@ pub fn container_infos(pod: &Pod) -> Vec<ContainerInfo> {
                 })
                 .collect(),
             init_container: init,
+            sidecar: init && c.restart_policy.as_deref() == Some("Always"),
         }
     };
     let init_statuses = status.and_then(|s| s.init_container_statuses.as_deref());

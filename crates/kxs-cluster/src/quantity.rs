@@ -3,7 +3,7 @@
 /// Splits a quantity into its numeric part and unit suffix. The longest
 /// f64-parseable prefix wins, so `1e3` parses as scientific notation while
 /// `1E` keeps `E` (exa) as the suffix, matching the apiserver.
-fn split_number(q: &str) -> Option<(f64, &str)> {
+pub(crate) fn split_number(q: &str) -> Option<(f64, &str)> {
     let mut end = None;
     for (i, _) in q.char_indices().skip(1) {
         if q[..i].parse::<f64>().is_ok() {

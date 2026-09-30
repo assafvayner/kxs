@@ -13,6 +13,7 @@ function c(
     restarts: 0,
     ports: [],
     initContainer: false,
+    sidecar: false,
     ...opts,
   };
 }
@@ -25,6 +26,15 @@ describe("execContainers", () => {
   it("drops init containers", () => {
     const infos = [c("migrate", { initContainer: true }), c("web"), c("sidecar")];
     expect(execContainers(infos).map((x) => x.name)).toEqual(["web", "sidecar"]);
+  });
+
+  it("keeps native sidecars (init containers with restartPolicy Always)", () => {
+    const infos = [
+      c("migrate", { initContainer: true }),
+      c("proxy", { initContainer: true, sidecar: true }),
+      c("web"),
+    ];
+    expect(execContainers(infos).map((x) => x.name)).toEqual(["proxy", "web"]);
   });
 });
 

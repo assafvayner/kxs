@@ -105,6 +105,40 @@ pub fn human_age(created: Option<&str>, now_ms: i64) -> String {
     human_duration((now_ms - t.timestamp_millis()) / 1000)
 }
 
+/// Seconds encoded by a kubectl HumanDuration string ("0s", "45s", "5m30s",
+/// "3h", "2d4h", "1y20d"). Anything else — including the API server's
+/// "<unknown>" / "<invalid>" placeholders — is `None`. Mirrors
+/// `src/lib/events.ts::parseHumanDuration`.
+pub fn parse_human_duration(text: &str) -> Option<i64> {
+    const UNITS: [(u8, i64); 4] = [(b's', 1), (b'm', 60), (b'h', 3600), (b'd', 86_400)];
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let b = t.as_bytes();
+    let mut total = 0i64;
+    let mut i = 0;
+    while i < b.len() {
+        let digits_start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == digits_start || i == b.len() {
+            return None; // no number, or unit missing
+        }
+        let n: i64 = t[digits_start..i].parse().ok()?;
+        let unit = b[i];
+        let secs = if unit == b'y' {
+            31_536_000
+        } else {
+            UNITS.iter().find(|(u, _)| *u == unit)?.1
+        };
+        total += n * secs;
+        i += 1;
+    }
+    Some(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +216,38 @@ mod tests {
         assert_eq!(human_at("2026-07-03T11:55:00Z"), "5m");
         assert_eq!(human_at("2026-07-03T12:00:01.500Z"), "0s");
         assert_eq!(human_at("2026-07-03T12:00:30Z"), "<invalid>");
+    }
+
+    #[test]
+    fn parse_human_duration_single_units() {
+        assert_eq!(parse_human_duration("0s"), Some(0));
+        assert_eq!(parse_human_duration("45s"), Some(45));
+        assert_eq!(parse_human_duration("7m"), Some(420));
+        assert_eq!(parse_human_duration("3h"), Some(10_800));
+        assert_eq!(parse_human_duration("2d"), Some(172_800));
+        assert_eq!(parse_human_duration("1y"), Some(31_536_000));
+    }
+
+    #[test]
+    fn parse_human_duration_two_units() {
+        assert_eq!(parse_human_duration("5m30s"), Some(330));
+        assert_eq!(parse_human_duration("2h15m"), Some(8_100));
+        assert_eq!(parse_human_duration("2d4h"), Some(187_200));
+    }
+
+    #[test]
+    fn parse_human_duration_tolerates_whitespace() {
+        assert_eq!(parse_human_duration("  12m  "), Some(720));
+    }
+
+    #[test]
+    fn parse_human_duration_rejects_placeholders_and_junk() {
+        assert_eq!(parse_human_duration("<unknown>"), None);
+        assert_eq!(parse_human_duration("<invalid>"), None);
+        assert_eq!(parse_human_duration(""), None);
+        assert_eq!(parse_human_duration("soon"), None);
+        assert_eq!(parse_human_duration("5x"), None);
+        assert_eq!(parse_human_duration("5m ago"), None);
+        assert_eq!(parse_human_duration("about 5m"), None);
     }
 }

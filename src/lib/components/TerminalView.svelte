@@ -75,7 +75,7 @@
           if (destroyed) return; // component gone; drop late output (term is disposed)
           if (ev.type === "output") {
             term!.write(decoder.decode(b64decodeToBytes(ev.data), { stream: true }));
-          } else {
+          } else if (!closed) {
             closed = true;
             term!.write(`\r\n[exec closed]\r\n`);
           }

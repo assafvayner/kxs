@@ -430,6 +430,21 @@ fn resource_event(e: k8s_openapi::api::core::v1::Event) -> ResourceEvent {
 /// Events referencing a given object (best-effort; empty on error). Filtering
 /// by kind too keeps out events for same-named objects of other kinds (e.g. a
 /// Service and Deployment both called "web").
+/// First `metadata.ownerReferences` entry of a manifest, as (kind, name).
+/// `None` when the resource is not owned by anything.
+pub fn owner_reference(yaml: &str) -> Option<(String, String)> {
+    let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml).ok()?;
+    let first = doc
+        .get("metadata")?
+        .get("ownerReferences")?
+        .as_sequence()?
+        .first()?;
+    Some((
+        first.get("kind")?.as_str()?.to_string(),
+        first.get("name")?.as_str()?.to_string(),
+    ))
+}
+
 pub async fn get_events(
     client: Client,
     namespace: Option<&str>,

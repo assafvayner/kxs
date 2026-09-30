@@ -1,0 +1,26 @@
+[package]
+name = "kxs-tui"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "kxs"
+path = "src/main.rs"
+
+[dependencies]
+kxs-core = { path = "../kxs-core", features = ["watch", "theme"] }
+kxs-cluster = { path = "../kxs-cluster" }
+ratatui = "0.30.2"
+crossterm = "0.29.0"
+libc = "0.2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+base64 = "0.22"
+tempfile = "3"
+k8s-openapi = { version = "0.25", features = ["latest"] }
+kube = { version = "1", default-features = false }
+clap = { version = "4.6.6", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+dirs = "6"
+futures = "0.3"
+tui-input = "0.15.4"
